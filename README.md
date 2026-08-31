@@ -1,9 +1,9 @@
 # Sotto
 
-Sotto is a private, local-first journal with a quiet 1-bit writing companion.
-The current MVP stores entries and reflections in SQLite, tracks writing
-progress with Riverpod, and generates a short Socratic question after ten idle
-seconds.
+Sotto is a private, local-first journal built around a quiet session ritual.
+Each session moves deliberately through Arrival, Writing, and Reflection, with
+a chronological Archive for returning to earlier days. Journal text, mood
+coordinates, questions, and replies stay on-device.
 
 ## Run
 
@@ -12,7 +12,9 @@ flutter pub get
 flutter run -d macos
 ```
 
-Without a model, Sotto uses a clearly labelled deterministic demo reflection.
+Reflection begins only when the writer chooses **Close session**. Without a
+model, Sotto uses a clearly labelled deterministic fallback question and never
+blocks session completion.
 To enable on-device inference, provide an app-accessible GGUF path:
 
 ```sh
@@ -25,14 +27,16 @@ supports Android, iOS, macOS, and Windows.
 
 ## Architecture
 
-- `lib/models` — journal and annotation value models
-- `lib/services` — cross-platform SQLite and local AI adapters
-- `lib/providers` — Riverpod session, word-count, and typing state
-- `lib/ui` — distraction-free editor and custom-painted pixel room
+- `lib/models` — entries, daily check-ins, phases, and archive cursors
+- `lib/services` — schema-v2 SQLite storage and local reflection adapters
+- `lib/providers` — explicit session transitions and archive pagination state
+- `lib/ui` — mood dial, immersive editor, reflection close, and archive zooms
 
 Desktop uses `sqflite_common_ffi` where needed; Apple and Android targets use
-the native `sqflite` implementation. The editor saves after 700ms of inactivity
-and asks the companion to reflect on only the last 150 words after 10 seconds.
+the native `sqflite` implementation. Drafts save after 700ms of inactivity.
+Archive pages use a stable `(closed_at, id)` cursor, and entry/week/month views
+retain relative scroll context while zooming. Theme analysis and embedding
+interfaces are reserved for a later semantic-graph milestone.
 
 ## Verify
 
