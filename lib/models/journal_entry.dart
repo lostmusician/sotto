@@ -2,11 +2,22 @@ import 'package:uuid/uuid.dart';
 
 const _uuid = Uuid();
 
-enum EntryStatus { draft, closed }
+enum AppPhase { loading, mood, journal, binder }
 
-enum SessionPhase { arrival, writing, reflection, archive }
+enum BinderZoom { days, weeks, months }
 
-enum ArchiveZoom { entries, weeks, months }
+enum DayEntryType { daily, additional }
+
+class EveningPreference {
+  const EveningPreference({this.minutesAfterMidnight = 18 * 60});
+
+  final int minutesAfterMidnight;
+  int get hour => minutesAfterMidnight ~/ 60;
+  int get minute => minutesAfterMidnight % 60;
+
+  bool isEvening(DateTime localTime) =>
+      localTime.hour * 60 + localTime.minute >= minutesAfterMidnight;
+}
 
 class DailyCheckIn {
   const DailyCheckIn({
@@ -17,18 +28,19 @@ class DailyCheckIn {
     required this.updatedAt,
   });
 
-  factory DailyCheckIn.today({
+  factory DailyCheckIn.forDate({
+    required String dateKey,
     required double moodAngle,
     required double moodIntensity,
     DateTime? now,
   }) {
-    final timestamp = now ?? DateTime.now();
+    final timestamp = (now ?? DateTime.now()).toUtc();
     return DailyCheckIn(
-      dateKey: localDateKey(timestamp),
+      dateKey: dateKey,
       moodAngle: moodAngle.clamp(0, 1),
       moodIntensity: moodIntensity.clamp(0, 1),
-      createdAt: timestamp.toUtc(),
-      updatedAt: timestamp.toUtc(),
+      createdAt: timestamp,
+      updatedAt: timestamp,
     );
   }
 
@@ -67,165 +79,147 @@ class DailyCheckIn {
   };
 }
 
-class AiAnnotation {
-  const AiAnnotation({
-    required this.id,
-    required this.entryId,
-    required this.question,
-    required this.anchorOffset,
+class JournalDay {
+  const JournalDay({
+    required this.dateKey,
+    required this.gratitude,
     required this.createdAt,
+    required this.updatedAt,
   });
 
-  factory AiAnnotation.create({
-    required String entryId,
-    required String question,
-    required int anchorOffset,
-  }) => AiAnnotation(
-    id: _uuid.v4(),
-    entryId: entryId,
-    question: question,
-    anchorOffset: anchorOffset,
-    createdAt: DateTime.now().toUtc(),
-  );
+  factory JournalDay.empty(String dateKey, {DateTime? now}) {
+    final timestamp = (now ?? DateTime.now()).toUtc();
+    return JournalDay(
+      dateKey: dateKey,
+      gratitude: '',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    );
+  }
 
-  factory AiAnnotation.fromMap(Map<String, Object?> map) => AiAnnotation(
-    id: map['id']! as String,
-    entryId: map['entry_id']! as String,
-    question: map['question']! as String,
-    anchorOffset: map['anchor_offset']! as int,
+  factory JournalDay.fromMap(Map<String, Object?> map) => JournalDay(
+    dateKey: map['date_key']! as String,
+    gratitude: (map['gratitude'] as String?) ?? '',
     createdAt: DateTime.parse(map['created_at']! as String),
+    updatedAt: DateTime.parse(map['updated_at']! as String),
   );
 
-  final String id;
-  final String entryId;
-  final String question;
-  final int anchorOffset;
+  final String dateKey;
+  final String gratitude;
   final DateTime createdAt;
+  final DateTime updatedAt;
+
+  JournalDay copyWith({String? gratitude, DateTime? updatedAt}) => JournalDay(
+    dateKey: dateKey,
+    gratitude: gratitude ?? this.gratitude,
+    createdAt: createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
 
   Map<String, Object?> toMap() => {
-    'id': id,
-    'entry_id': entryId,
-    'question': question,
-    'anchor_offset': anchorOffset,
+    'date_key': dateKey,
+    'gratitude': gratitude,
     'created_at': createdAt.toIso8601String(),
+    'updated_at': updatedAt.toIso8601String(),
   };
 }
 
-class JournalEntry {
-  const JournalEntry({
+class DayEntry {
+  const DayEntry({
     required this.id,
+    required this.dateKey,
+    required this.type,
     required this.title,
     required this.content,
     required this.createdAt,
     required this.updatedAt,
-    required this.targetWordCount,
-    this.status = EntryStatus.draft,
-    this.closedAt,
-    this.reflectionQuestion,
-    this.reflectionReply = '',
-    this.annotations = const [],
   });
 
-  factory JournalEntry.empty({DateTime? now}) {
+  factory DayEntry.empty({
+    required String dateKey,
+    required DayEntryType type,
+    DateTime? now,
+  }) {
     final timestamp = (now ?? DateTime.now()).toUtc();
-    return JournalEntry(
+    return DayEntry(
       id: _uuid.v4(),
-      title: 'Untitled entry',
+      dateKey: dateKey,
+      type: type,
+      title: '',
       content: '',
       createdAt: timestamp,
       updatedAt: timestamp,
-      targetWordCount: 500,
     );
   }
 
-  factory JournalEntry.fromMap(
-    Map<String, Object?> map, {
-    List<AiAnnotation> annotations = const [],
-  }) => JournalEntry(
+  factory DayEntry.fromMap(Map<String, Object?> map) => DayEntry(
     id: map['id']! as String,
-    title: map['title']! as String,
-    content: map['content']! as String,
+    dateKey: map['date_key']! as String,
+    type: DayEntryType.values.byName(map['entry_type']! as String),
+    title: (map['title'] as String?) ?? '',
+    content: (map['content'] as String?) ?? '',
     createdAt: DateTime.parse(map['created_at']! as String),
     updatedAt: DateTime.parse(map['updated_at']! as String),
-    targetWordCount: map['target_word_count']! as int,
-    status: EntryStatus.values.byName(
-      (map['status'] as String?) ?? EntryStatus.draft.name,
-    ),
-    closedAt: map['closed_at'] == null
-        ? null
-        : DateTime.parse(map['closed_at']! as String),
-    reflectionQuestion: map['reflection_question'] as String?,
-    reflectionReply: (map['reflection_reply'] as String?) ?? '',
-    annotations: annotations,
   );
 
   final String id;
+  final String dateKey;
+  final DayEntryType type;
   final String title;
   final String content;
   final DateTime createdAt;
   final DateTime updatedAt;
-  final int targetWordCount;
-  final EntryStatus status;
-  final DateTime? closedAt;
-  final String? reflectionQuestion;
-  final String reflectionReply;
-  final List<AiAnnotation> annotations;
 
+  bool get isEmpty => title.trim().isEmpty && content.trim().isEmpty;
   int get wordCount {
-    final trimmed = content.trim();
-    return trimmed.isEmpty ? 0 : trimmed.split(RegExp(r'\s+')).length;
+    final value = content.trim();
+    return value.isEmpty ? 0 : value.split(RegExp(r'\s+')).length;
   }
 
-  double get progress =>
-      targetWordCount <= 0 ? 0 : (wordCount / targetWordCount).clamp(0, 1);
-
-  JournalEntry copyWith({
-    String? title,
-    String? content,
-    DateTime? updatedAt,
-    int? targetWordCount,
-    EntryStatus? status,
-    DateTime? closedAt,
-    bool clearClosedAt = false,
-    String? reflectionQuestion,
-    bool clearReflectionQuestion = false,
-    String? reflectionReply,
-    List<AiAnnotation>? annotations,
-  }) => JournalEntry(
-    id: id,
-    title: title ?? this.title,
-    content: content ?? this.content,
-    createdAt: createdAt,
-    updatedAt: updatedAt ?? this.updatedAt,
-    targetWordCount: targetWordCount ?? this.targetWordCount,
-    status: status ?? this.status,
-    closedAt: clearClosedAt ? null : closedAt ?? this.closedAt,
-    reflectionQuestion: clearReflectionQuestion
-        ? null
-        : reflectionQuestion ?? this.reflectionQuestion,
-    reflectionReply: reflectionReply ?? this.reflectionReply,
-    annotations: annotations ?? this.annotations,
-  );
+  DayEntry copyWith({String? title, String? content, DateTime? updatedAt}) =>
+      DayEntry(
+        id: id,
+        dateKey: dateKey,
+        type: type,
+        title: title ?? this.title,
+        content: content ?? this.content,
+        createdAt: createdAt,
+        updatedAt: updatedAt ?? this.updatedAt,
+      );
 
   Map<String, Object?> toMap() => {
     'id': id,
+    'date_key': dateKey,
+    'entry_type': type.name,
     'title': title,
     'content': content,
     'created_at': createdAt.toIso8601String(),
     'updated_at': updatedAt.toIso8601String(),
-    'target_word_count': targetWordCount,
-    'status': status.name,
-    'closed_at': closedAt?.toIso8601String(),
-    'reflection_question': reflectionQuestion,
-    'reflection_reply': reflectionReply,
   };
 }
 
-class ArchiveCursor {
-  const ArchiveCursor({required this.closedAt, required this.entryId});
+class BinderDay {
+  const BinderDay({
+    required this.day,
+    required this.entries,
+    required this.checkIn,
+  });
 
-  final DateTime closedAt;
-  final String entryId;
+  final JournalDay day;
+  final List<DayEntry> entries;
+  final DailyCheckIn? checkIn;
+
+  DayEntry? get dailyEntry =>
+      entries.where((entry) => entry.type == DayEntryType.daily).firstOrNull;
+  List<DayEntry> get additionalEntries =>
+      entries.where((entry) => entry.type == DayEntryType.additional).toList();
+  bool get journalComplete => dailyEntry?.content.trim().isNotEmpty ?? false;
+  bool get isComplete => journalComplete && checkIn != null;
+}
+
+class BinderCursor {
+  const BinderCursor(this.dateKey);
+  final String dateKey;
 }
 
 String localDateKey(DateTime date) {
@@ -233,4 +227,9 @@ String localDateKey(DateTime date) {
   return '${local.year.toString().padLeft(4, '0')}-'
       '${local.month.toString().padLeft(2, '0')}-'
       '${local.day.toString().padLeft(2, '0')}';
+}
+
+DateTime localDateFromKey(String dateKey) {
+  final parts = dateKey.split('-').map(int.parse).toList();
+  return DateTime(parts[0], parts[1], parts[2]);
 }

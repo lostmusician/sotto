@@ -1,7 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/journal_entry.dart';
-import '../services/ai_service.dart';
 import '../services/database_service.dart';
 
 final databaseServiceProvider = Provider<DatabaseService>((ref) {
@@ -10,383 +9,400 @@ final databaseServiceProvider = Provider<DatabaseService>((ref) {
   return service;
 });
 
-final reflectionServiceProvider = Provider<ReflectionService>(
-  (ref) => AiService(),
-);
-
-class JournalSessionState {
-  const JournalSessionState({
-    this.phase = SessionPhase.arrival,
-    this.phaseBeforeArchive = SessionPhase.arrival,
-    this.entry,
-    this.todayCheckIn,
+class JournalAppState {
+  const JournalAppState({
+    this.phase = AppPhase.loading,
+    this.selectedDateKey,
+    this.day,
+    this.entries = const [],
+    this.selectedEntryId,
+    this.checkIn,
+    this.eveningPreference = const EveningPreference(),
+    this.showMoodReminder = false,
     this.isLoading = false,
-    this.isReflecting = false,
-    this.lastReflectionWasDemo = false,
     this.error,
   });
 
-  final SessionPhase phase;
-  final SessionPhase phaseBeforeArchive;
-  final JournalEntry? entry;
-  final DailyCheckIn? todayCheckIn;
+  final AppPhase phase;
+  final String? selectedDateKey;
+  final JournalDay? day;
+  final List<DayEntry> entries;
+  final String? selectedEntryId;
+  final DailyCheckIn? checkIn;
+  final EveningPreference eveningPreference;
+  final bool showMoodReminder;
   final bool isLoading;
-  final bool isReflecting;
-  final bool lastReflectionWasDemo;
   final Object? error;
 
-  bool get hasUnfinishedDraft =>
-      entry != null && entry!.status == EntryStatus.draft;
+  DayEntry? get selectedEntry =>
+      entries.where((entry) => entry.id == selectedEntryId).firstOrNull;
+  DayEntry? get dailyEntry =>
+      entries.where((entry) => entry.type == DayEntryType.daily).firstOrNull;
+  bool get journalComplete => dailyEntry?.content.trim().isNotEmpty ?? false;
+  bool get dayComplete => journalComplete && checkIn != null;
 
-  JournalSessionState copyWith({
-    SessionPhase? phase,
-    SessionPhase? phaseBeforeArchive,
-    JournalEntry? entry,
-    bool clearEntry = false,
-    DailyCheckIn? todayCheckIn,
+  JournalAppState copyWith({
+    AppPhase? phase,
+    String? selectedDateKey,
+    JournalDay? day,
+    List<DayEntry>? entries,
+    String? selectedEntryId,
+    bool clearSelectedEntry = false,
+    DailyCheckIn? checkIn,
+    bool clearCheckIn = false,
+    EveningPreference? eveningPreference,
+    bool? showMoodReminder,
     bool? isLoading,
-    bool? isReflecting,
-    bool? lastReflectionWasDemo,
     Object? error,
     bool clearError = false,
-  }) => JournalSessionState(
+  }) => JournalAppState(
     phase: phase ?? this.phase,
-    phaseBeforeArchive: phaseBeforeArchive ?? this.phaseBeforeArchive,
-    entry: clearEntry ? null : entry ?? this.entry,
-    todayCheckIn: todayCheckIn ?? this.todayCheckIn,
+    selectedDateKey: selectedDateKey ?? this.selectedDateKey,
+    day: day ?? this.day,
+    entries: entries ?? this.entries,
+    selectedEntryId: clearSelectedEntry
+        ? null
+        : selectedEntryId ?? this.selectedEntryId,
+    checkIn: clearCheckIn ? null : checkIn ?? this.checkIn,
+    eveningPreference: eveningPreference ?? this.eveningPreference,
+    showMoodReminder: showMoodReminder ?? this.showMoodReminder,
     isLoading: isLoading ?? this.isLoading,
-    isReflecting: isReflecting ?? this.isReflecting,
-    lastReflectionWasDemo: lastReflectionWasDemo ?? this.lastReflectionWasDemo,
     error: clearError ? null : error ?? this.error,
   );
 }
 
-class JournalController extends StateNotifier<JournalSessionState> {
-  JournalController(this._database, this._reflectionService)
-    : super(const JournalSessionState());
+class JournalController extends StateNotifier<JournalAppState> {
+  JournalController(this._database) : super(const JournalAppState());
 
   final DatabaseService _database;
-  final ReflectionService _reflectionService;
 
   Future<void> initialize({DateTime? now}) async {
+    final timestamp = now ?? DateTime.now();
+    final dateKey = localDateKey(timestamp);
     state = state.copyWith(isLoading: true, clearError: true);
     try {
-      final timestamp = now ?? DateTime.now();
-      final results = await Future.wait<Object?>([
-        _database.latestDraft(),
-        _database.checkInForDate(localDateKey(timestamp)),
-      ]);
+      final preference = await _database.eveningPreference();
+      final binderDay = await _database.loadBinderDay(dateKey);
       state = state.copyWith(
-        entry: results[0] as JournalEntry?,
-        clearEntry: results[0] == null,
-        todayCheckIn: results[1] as DailyCheckIn?,
-        phase: SessionPhase.arrival,
+        selectedDateKey: dateKey,
+        day: binderDay.day,
+        entries: binderDay.entries,
+        checkIn: binderDay.checkIn,
+        clearCheckIn: binderDay.checkIn == null,
+        eveningPreference: preference,
         isLoading: false,
       );
+      if (binderDay.isComplete) {
+        state = state.copyWith(phase: AppPhase.binder, showMoodReminder: false);
+      } else if (preference.isEvening(timestamp) && binderDay.checkIn == null) {
+        await openMood(dateKey);
+      } else if (!binderDay.journalComplete) {
+        await openDay(dateKey, now: timestamp);
+      } else {
+        state = state.copyWith(
+          phase: AppPhase.binder,
+          showMoodReminder: binderDay.checkIn == null,
+        );
+      }
     } catch (error) {
-      state = state.copyWith(isLoading: false, error: error);
+      state = state.copyWith(
+        phase: AppPhase.binder,
+        isLoading: false,
+        error: error,
+      );
     }
   }
 
-  void updateMood(double angle, double intensity, {DateTime? now}) {
-    final existing = state.todayCheckIn;
+  Future<void> openDay(
+    String dateKey, {
+    bool createAdditional = false,
+    DateTime? now,
+  }) async {
+    if (!await saveCurrentEntry()) return;
+    final binderDay = await _database.loadBinderDay(dateKey, create: true);
+    var entries = binderDay.entries;
+    var daily = entries
+        .where((entry) => entry.type == DayEntryType.daily)
+        .firstOrNull;
+    if (daily == null) {
+      daily = DayEntry.empty(
+        dateKey: dateKey,
+        type: DayEntryType.daily,
+        now: now,
+      );
+      await _database.saveDayEntry(daily);
+      entries = [daily, ...entries];
+    }
+    state = state.copyWith(
+      phase: AppPhase.journal,
+      selectedDateKey: dateKey,
+      day: binderDay.day,
+      entries: entries,
+      selectedEntryId: daily.id,
+      checkIn: binderDay.checkIn,
+      clearCheckIn: binderDay.checkIn == null,
+      showMoodReminder: false,
+      clearError: true,
+    );
+    if (createAdditional) await addEntry(now: now);
+  }
+
+  Future<void> selectEntry(String entryId) async {
+    if (state.phase != AppPhase.journal || entryId == state.selectedEntryId) {
+      return;
+    }
+    if (!await saveCurrentEntry()) return;
+    if (state.entries.any((entry) => entry.id == entryId)) {
+      state = state.copyWith(selectedEntryId: entryId);
+    }
+  }
+
+  Future<void> addEntry({DateTime? now}) async {
+    final dateKey = state.selectedDateKey;
+    if (state.phase != AppPhase.journal || dateKey == null) return;
+    if (!await saveCurrentEntry()) return;
+    final entry = DayEntry.empty(
+      dateKey: dateKey,
+      type: DayEntryType.additional,
+      now: now,
+    );
+    state = state.copyWith(
+      entries: [
+        state.dailyEntry!,
+        entry,
+        ...state.entries.where((e) => e.type == DayEntryType.additional),
+      ],
+      selectedEntryId: entry.id,
+      clearError: true,
+    );
+  }
+
+  void updateEntry({String? title, String? content, DateTime? now}) {
+    final selected = state.selectedEntry;
+    if (state.phase != AppPhase.journal || selected == null) return;
+    final updated = selected.copyWith(
+      title: title,
+      content: content,
+      updatedAt: (now ?? DateTime.now()).toUtc(),
+    );
+    state = state.copyWith(
+      entries: [
+        for (final entry in state.entries)
+          if (entry.id == updated.id) updated else entry,
+      ],
+      clearError: true,
+    );
+  }
+
+  void updateGratitude(String gratitude, {DateTime? now}) {
+    if (state.phase != AppPhase.journal || state.day == null) return;
+    state = state.copyWith(
+      day: state.day!.copyWith(
+        gratitude: gratitude,
+        updatedAt: (now ?? DateTime.now()).toUtc(),
+      ),
+      clearError: true,
+    );
+  }
+
+  Future<bool> saveCurrentEntry() async {
+    final entry = state.selectedEntry;
+    if (entry == null) return true;
+    try {
+      if (entry.type == DayEntryType.additional && entry.isEmpty) {
+        await _database.deleteDayEntry(entry.id);
+        state = state.copyWith(
+          entries: state.entries.where((item) => item.id != entry.id).toList(),
+          selectedEntryId: state.dailyEntry?.id,
+        );
+      } else {
+        await _database.saveDayEntry(entry);
+      }
+      return true;
+    } catch (error) {
+      state = state.copyWith(error: error);
+      return false;
+    }
+  }
+
+  Future<bool> saveGratitude() async {
+    final day = state.day;
+    if (day == null) return true;
+    try {
+      await _database.saveDay(day);
+      return true;
+    } catch (error) {
+      state = state.copyWith(error: error);
+      return false;
+    }
+  }
+
+  Future<void> finishEditing({DateTime? now}) async {
+    if (!await saveCurrentEntry()) return;
+    if (!await saveGratitude()) return;
     final timestamp = now ?? DateTime.now();
-    final checkIn = existing == null
-        ? DailyCheckIn.today(
+    final todayKey = localDateKey(timestamp);
+    if (state.selectedDateKey == todayKey &&
+        state.eveningPreference.isEvening(timestamp) &&
+        state.checkIn == null) {
+      await openMood(todayKey);
+    } else {
+      state = state.copyWith(
+        phase: AppPhase.binder,
+        showMoodReminder:
+            state.selectedDateKey == todayKey && state.checkIn == null,
+      );
+    }
+  }
+
+  Future<void> openMood(String dateKey, {DateTime? now}) async {
+    if (!await saveCurrentEntry()) return;
+    if (!await saveGratitude()) return;
+    final binderDay = await _database.loadBinderDay(dateKey, create: true);
+    state = state.copyWith(
+      phase: AppPhase.mood,
+      selectedDateKey: dateKey,
+      day: binderDay.day,
+      entries: binderDay.entries,
+      checkIn: binderDay.checkIn,
+      clearCheckIn: binderDay.checkIn == null,
+      showMoodReminder: false,
+      clearError: true,
+    );
+  }
+
+  void updateMood(double angle, double intensity, {DateTime? now}) {
+    final dateKey = state.selectedDateKey;
+    if (state.phase != AppPhase.mood || dateKey == null) return;
+    final timestamp = now ?? DateTime.now();
+    final checkIn = state.checkIn == null
+        ? DailyCheckIn.forDate(
+            dateKey: dateKey,
             moodAngle: angle,
             moodIntensity: intensity,
             now: timestamp,
           )
-        : existing.copyWith(
+        : state.checkIn!.copyWith(
             moodAngle: angle,
             moodIntensity: intensity,
             updatedAt: timestamp.toUtc(),
           );
-    state = state.copyWith(todayCheckIn: checkIn, clearError: true);
+    state = state.copyWith(checkIn: checkIn, clearError: true);
   }
 
-  Future<void> saveMood() async {
-    final checkIn = state.todayCheckIn;
-    if (checkIn == null) return;
+  Future<bool> saveMood() async {
+    final checkIn = state.checkIn;
+    if (checkIn == null) return true;
     try {
       await _database.saveCheckIn(checkIn);
+      return true;
     } catch (error) {
       state = state.copyWith(error: error);
+      return false;
     }
   }
 
-  Future<void> beginSession({DateTime? now}) async {
-    if (state.phase != SessionPhase.arrival) return;
+  Future<void> finishMood({DateTime? now}) async {
+    if (!await saveMood()) return;
     final timestamp = now ?? DateTime.now();
-    final checkIn =
-        state.todayCheckIn ??
-        DailyCheckIn.today(moodAngle: .12, moodIntensity: .55, now: timestamp);
-    final entry = state.hasUnfinishedDraft
-        ? state.entry!
-        : JournalEntry.empty(now: timestamp);
-    state = state.copyWith(
-      phase: SessionPhase.writing,
-      entry: entry,
-      todayCheckIn: checkIn,
-      clearError: true,
+    final todayKey = localDateKey(timestamp);
+    final day = await _database.loadBinderDay(
+      state.selectedDateKey ?? todayKey,
     );
-    try {
-      await Future.wait([
-        _database.saveCheckIn(checkIn),
-        _database.saveEntry(entry),
-      ]);
-    } catch (error) {
-      state = state.copyWith(error: error);
+    if (state.selectedDateKey == todayKey && !day.journalComplete) {
+      await openDay(todayKey, now: timestamp);
+    } else {
+      state = state.copyWith(phase: AppPhase.binder, showMoodReminder: false);
     }
   }
 
-  void updateContent(String content) {
-    if (state.phase != SessionPhase.writing || state.entry == null) return;
-    state = state.copyWith(
-      entry: state.entry!.copyWith(
-        content: content,
-        updatedAt: DateTime.now().toUtc(),
-      ),
-      clearError: true,
-    );
+  Future<void> openBinder() async {
+    if (!await saveCurrentEntry()) return;
+    if (!await saveGratitude()) return;
+    if (!await saveMood()) return;
+    state = state.copyWith(phase: AppPhase.binder);
   }
 
-  Future<void> saveDraft() async {
-    final entry = state.entry;
-    if (entry == null || entry.status != EntryStatus.draft) return;
-    try {
-      await _database.saveEntry(entry);
-    } catch (error) {
-      state = state.copyWith(error: error);
-    }
-  }
-
-  Future<void> requestClose() async {
-    final entry = state.entry;
-    if (state.phase != SessionPhase.writing ||
-        entry == null ||
-        state.isReflecting) {
-      return;
-    }
-    await saveDraft();
-    if (state.phase != SessionPhase.writing || state.entry?.id != entry.id) {
-      return;
-    }
-    state = state.copyWith(
-      phase: SessionPhase.reflection,
-      isReflecting: true,
-      clearError: true,
+  Future<void> updateEveningPreference(int minutes) async {
+    final preference = EveningPreference(
+      minutesAfterMidnight: minutes.clamp(0, 1439),
     );
-    final entryId = entry.id;
-    late final ReflectionResult result;
-    try {
-      result = await _reflectionService.reflectOn(entry.content);
-    } catch (error) {
-      result = ReflectionResult(
-        question: 'What feels most true here?',
-        isDemo: true,
-        failure: error,
-      );
-    }
-    if (state.phase != SessionPhase.reflection || state.entry?.id != entryId) {
-      return;
-    }
-    final updated = state.entry!.copyWith(
-      reflectionQuestion: result.question,
-      updatedAt: DateTime.now().toUtc(),
-    );
-    state = state.copyWith(
-      entry: updated,
-      isReflecting: false,
-      lastReflectionWasDemo: result.isDemo,
-      error: result.failure,
-    );
-    try {
-      await _database.saveEntry(updated);
-    } catch (error) {
-      state = state.copyWith(error: error);
-    }
-  }
-
-  Future<void> saveReflectionReply(String reply) async {
-    if (state.phase != SessionPhase.reflection || state.entry == null) return;
-    updateReflectionReply(reply);
-    try {
-      await _database.saveEntry(state.entry!);
-    } catch (error) {
-      state = state.copyWith(error: error);
-    }
-  }
-
-  void updateReflectionReply(String reply) {
-    if (state.phase != SessionPhase.reflection || state.entry == null) return;
-    state = state.copyWith(
-      entry: state.entry!.copyWith(
-        reflectionReply: reply,
-        updatedAt: DateTime.now().toUtc(),
-      ),
-      clearError: true,
-    );
-  }
-
-  Future<void> reopenWriting() async {
-    if (state.phase != SessionPhase.reflection || state.entry == null) return;
-    final entry = state.entry!.copyWith(
-      clearReflectionQuestion: true,
-      reflectionReply: '',
-      updatedAt: DateTime.now().toUtc(),
-    );
-    state = state.copyWith(
-      phase: SessionPhase.writing,
-      entry: entry,
-      isReflecting: false,
-      lastReflectionWasDemo: false,
-      clearError: true,
-    );
-    try {
-      await _database.saveEntry(entry);
-    } catch (error) {
-      state = state.copyWith(error: error);
-    }
-  }
-
-  Future<void> finishSession({DateTime? now}) async {
-    if (state.phase != SessionPhase.reflection || state.entry == null) return;
-    final timestamp = (now ?? DateTime.now()).toUtc();
-    final closed = state.entry!.copyWith(
-      status: EntryStatus.closed,
-      closedAt: timestamp,
-      updatedAt: timestamp,
-    );
-    state = state.copyWith(
-      phase: SessionPhase.archive,
-      phaseBeforeArchive: SessionPhase.arrival,
-      entry: closed,
-      isReflecting: false,
-      clearError: true,
-    );
-    try {
-      await _database.saveEntry(closed);
-    } catch (error) {
-      state = state.copyWith(error: error);
-    }
-  }
-
-  Future<void> openArchive() async {
-    if (state.phase == SessionPhase.archive) return;
-    if (state.phase == SessionPhase.arrival) await saveMood();
-    if (state.phase == SessionPhase.writing) await saveDraft();
-    state = state.copyWith(
-      phaseBeforeArchive: state.phase,
-      phase: SessionPhase.archive,
-    );
-  }
-
-  void leaveArchive() {
-    if (state.phase != SessionPhase.archive) return;
-    state = state.copyWith(phase: state.phaseBeforeArchive);
-  }
-
-  void startNewSession() {
-    state = state.copyWith(
-      phase: SessionPhase.arrival,
-      phaseBeforeArchive: SessionPhase.arrival,
-      clearEntry: true,
-      isReflecting: false,
-      lastReflectionWasDemo: false,
-      clearError: true,
-    );
+    state = state.copyWith(eveningPreference: preference);
+    await _database.saveEveningPreference(preference);
   }
 }
 
 final journalControllerProvider =
-    StateNotifierProvider<JournalController, JournalSessionState>(
-      (ref) => JournalController(
-        ref.watch(databaseServiceProvider),
-        ref.watch(reflectionServiceProvider),
-      ),
+    StateNotifierProvider<JournalController, JournalAppState>(
+      (ref) => JournalController(ref.watch(databaseServiceProvider)),
     );
 
-class ArchiveState {
-  const ArchiveState({
-    this.zoom = ArchiveZoom.entries,
-    this.entries = const [],
-    this.checkIns = const {},
+class BinderState {
+  const BinderState({
+    this.zoom = BinderZoom.days,
+    this.days = const [],
+    this.selectedDateKey,
     this.isLoading = false,
     this.hasMore = true,
     this.error,
   });
 
-  final ArchiveZoom zoom;
-  final List<JournalEntry> entries;
-  final Map<String, DailyCheckIn> checkIns;
+  final BinderZoom zoom;
+  final List<BinderDay> days;
+  final String? selectedDateKey;
   final bool isLoading;
   final bool hasMore;
   final Object? error;
 
-  ArchiveState copyWith({
-    ArchiveZoom? zoom,
-    List<JournalEntry>? entries,
-    Map<String, DailyCheckIn>? checkIns,
+  BinderState copyWith({
+    BinderZoom? zoom,
+    List<BinderDay>? days,
+    String? selectedDateKey,
     bool? isLoading,
     bool? hasMore,
     Object? error,
     bool clearError = false,
-  }) => ArchiveState(
+  }) => BinderState(
     zoom: zoom ?? this.zoom,
-    entries: entries ?? this.entries,
-    checkIns: checkIns ?? this.checkIns,
+    days: days ?? this.days,
+    selectedDateKey: selectedDateKey ?? this.selectedDateKey,
     isLoading: isLoading ?? this.isLoading,
     hasMore: hasMore ?? this.hasMore,
     error: clearError ? null : error ?? this.error,
   );
 }
 
-class ArchiveController extends StateNotifier<ArchiveState> {
-  ArchiveController(this._database) : super(const ArchiveState());
+class BinderController extends StateNotifier<BinderState> {
+  BinderController(this._database) : super(const BinderState());
 
-  static const pageSize = 30;
+  static const pageSize = 20;
   final DatabaseService _database;
 
-  Future<void> refresh() async {
+  Future<void> refresh({String? anchorDateKey}) async {
     state = state.copyWith(
-      entries: const [],
-      checkIns: const {},
+      days: const [],
+      selectedDateKey: anchorDateKey ?? state.selectedDateKey,
       hasMore: true,
       clearError: true,
     );
     await loadMore();
+    if (state.selectedDateKey == null && state.days.isNotEmpty) {
+      state = state.copyWith(selectedDateKey: state.days.first.day.dateKey);
+    }
   }
 
   Future<void> loadMore() async {
     if (state.isLoading || !state.hasMore) return;
     state = state.copyWith(isLoading: true, clearError: true);
     try {
-      final last = state.entries.lastOrNull;
-      final page = await _database.archivePage(
-        cursor: last?.closedAt == null
+      final page = await _database.binderPage(
+        cursor: state.days.lastOrNull == null
             ? null
-            : ArchiveCursor(closedAt: last!.closedAt!, entryId: last.id),
+            : BinderCursor(state.days.last.day.dateKey),
         limit: pageSize,
       );
-      final pageCheckIns = <String, DailyCheckIn>{};
-      if (page.isNotEmpty) {
-        final dates =
-            page
-                .map((entry) => localDateKey(entry.closedAt ?? entry.updatedAt))
-                .toList()
-              ..sort();
-        final checkIns = await _database.checkInsBetween(
-          dates.first,
-          dates.last,
-        );
-        for (final checkIn in checkIns) {
-          pageCheckIns[checkIn.dateKey] = checkIn;
-        }
-      }
       state = state.copyWith(
-        entries: [...state.entries, ...page],
-        checkIns: {...state.checkIns, ...pageCheckIns},
+        days: [...state.days, ...page],
         isLoading: false,
         hasMore: page.length == pageSize,
       );
@@ -395,18 +411,16 @@ class ArchiveController extends StateNotifier<ArchiveState> {
     }
   }
 
-  void setZoom(ArchiveZoom zoom) {
+  void selectDate(String dateKey) {
+    state = state.copyWith(selectedDateKey: dateKey);
+  }
+
+  void setZoom(BinderZoom zoom) {
     state = state.copyWith(zoom: zoom);
   }
 }
 
-final archiveControllerProvider =
-    StateNotifierProvider<ArchiveController, ArchiveState>(
-      (ref) => ArchiveController(ref.watch(databaseServiceProvider)),
+final binderControllerProvider =
+    StateNotifierProvider<BinderController, BinderState>(
+      (ref) => BinderController(ref.watch(databaseServiceProvider)),
     );
-
-final activeWordCountProvider = Provider<int>(
-  (ref) => ref.watch(
-    journalControllerProvider.select((state) => state.entry?.wordCount ?? 0),
-  ),
-);

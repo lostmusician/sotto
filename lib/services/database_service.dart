@@ -12,7 +12,8 @@ class DatabaseService {
     : _injectedFactory = factory,
       _injectedPath = databasePath;
 
-  static const schemaVersion = 2;
+  static const schemaVersion = 3;
+  static const eveningSettingKey = 'evening_minutes';
 
   final DatabaseFactory? _injectedFactory;
   final String? _injectedPath;
@@ -35,35 +36,8 @@ class DatabaseService {
   }
 
   Future<void> _createSchema(Database db) async {
-    await db.execute('''
-      CREATE TABLE journal_entries (
-        id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        content TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        target_word_count INTEGER NOT NULL DEFAULT 500,
-        status TEXT NOT NULL DEFAULT 'draft',
-        closed_at TEXT,
-        reflection_question TEXT,
-        reflection_reply TEXT NOT NULL DEFAULT ''
-      )
-    ''');
-    await db.execute('''
-      CREATE TABLE ai_annotations (
-        id TEXT PRIMARY KEY,
-        entry_id TEXT NOT NULL,
-        question TEXT NOT NULL,
-        anchor_offset INTEGER NOT NULL,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY(entry_id) REFERENCES journal_entries(id) ON DELETE CASCADE
-      )
-    ''');
-    await db.execute(
-      'CREATE INDEX annotations_entry_id ON ai_annotations(entry_id, created_at)',
-    );
     await _createCheckInTable(db);
-    await _createArchiveIndex(db);
+    await _createDailyTables(db);
   }
 
   Future<void> _upgradeSchema(
@@ -83,32 +57,27 @@ class DatabaseService {
         "ALTER TABLE journal_entries ADD COLUMN reflection_reply TEXT NOT NULL DEFAULT ''",
       );
       await db.execute('''
-          UPDATE journal_entries
-          SET status = CASE
-                WHEN trim(content) = '' THEN 'draft'
-                ELSE 'closed'
-              END,
-              closed_at = CASE
-                WHEN trim(content) = '' THEN NULL
-                ELSE updated_at
-              END
-        ''');
+        UPDATE journal_entries
+        SET status = CASE WHEN trim(content) = '' THEN 'draft' ELSE 'closed' END,
+            closed_at = CASE WHEN trim(content) = '' THEN NULL ELSE updated_at END
+      ''');
       await db.execute('''
-          UPDATE journal_entries
-          SET reflection_question = (
-            SELECT question
-            FROM ai_annotations
-            WHERE ai_annotations.entry_id = journal_entries.id
-            ORDER BY created_at DESC
-            LIMIT 1
-          )
-          WHERE EXISTS (
-            SELECT 1 FROM ai_annotations
-            WHERE ai_annotations.entry_id = journal_entries.id
-          )
-        ''');
+        UPDATE journal_entries
+        SET reflection_question = (
+          SELECT question FROM ai_annotations
+          WHERE ai_annotations.entry_id = journal_entries.id
+          ORDER BY created_at DESC LIMIT 1
+        )
+        WHERE EXISTS (
+          SELECT 1 FROM ai_annotations
+          WHERE ai_annotations.entry_id = journal_entries.id
+        )
+      ''');
       await _createCheckInTable(db);
-      await _createArchiveIndex(db);
+    }
+    if (oldVersion < 3) {
+      await _createDailyTables(db);
+      await _migrateLegacyEntries(db);
     }
   }
 
@@ -122,10 +91,115 @@ class DatabaseService {
     )
   ''');
 
-  Future<void> _createArchiveIndex(DatabaseExecutor db) => db.execute('''
-    CREATE INDEX IF NOT EXISTS entries_archive_cursor
-    ON journal_entries(status, closed_at DESC, id DESC)
-  ''');
+  Future<void> _createDailyTables(DatabaseExecutor db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS journal_days (
+        date_key TEXT PRIMARY KEY,
+        gratitude TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS day_entries (
+        id TEXT PRIMARY KEY,
+        date_key TEXT NOT NULL,
+        entry_type TEXT NOT NULL CHECK(entry_type IN ('daily', 'additional')),
+        title TEXT NOT NULL DEFAULT '',
+        content TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(date_key) REFERENCES journal_days(date_key) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute('''
+      CREATE UNIQUE INDEX IF NOT EXISTS one_daily_entry_per_day
+      ON day_entries(date_key) WHERE entry_type = 'daily'
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS day_entries_date_order
+      ON day_entries(date_key, entry_type, created_at DESC, id DESC)
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS app_settings (
+        setting_key TEXT PRIMARY KEY,
+        setting_value TEXT NOT NULL
+      )
+    ''');
+    await db.insert('app_settings', {
+      'setting_key': eveningSettingKey,
+      'setting_value': '${18 * 60}',
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
+  }
+
+  Future<void> _migrateLegacyEntries(DatabaseExecutor db) async {
+    final tables = await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'journal_entries'",
+    );
+    if (tables.isEmpty) return;
+
+    final rows = await db.query(
+      'journal_entries',
+      orderBy: 'created_at ASC, id ASC',
+    );
+    final latestDraftRows = await db.query(
+      'journal_entries',
+      where: "status = 'draft'",
+      orderBy: 'updated_at DESC, id DESC',
+      limit: 1,
+    );
+    final latestDraftId = latestDraftRows.firstOrNull?['id'] as String?;
+    final groups = <String, List<Map<String, Object?>>>{};
+    for (final row in rows) {
+      final content = (row['content'] as String?) ?? '';
+      if (content.trim().isEmpty && row['id'] != latestDraftId) continue;
+      final dateKey = localDateKey(
+        DateTime.parse(row['created_at']! as String),
+      );
+      groups.putIfAbsent(dateKey, () => []).add(row);
+    }
+
+    for (final group in groups.entries) {
+      final rowsForDay = group.value;
+      final firstNonEmpty = rowsForDay
+          .where(
+            ((row) => ((row['content'] as String?) ?? '').trim().isNotEmpty),
+          )
+          .firstOrNull;
+      final dailyRow = firstNonEmpty ?? rowsForDay.first;
+      final createdAt = dailyRow['created_at']! as String;
+      final updatedAt = rowsForDay.last['updated_at']! as String;
+      await db.insert('journal_days', {
+        'date_key': group.key,
+        'gratitude': '',
+        'created_at': createdAt,
+        'updated_at': updatedAt,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      for (final row in rowsForDay) {
+        await db.insert('day_entries', {
+          'id': row['id'],
+          'date_key': group.key,
+          'entry_type': row['id'] == dailyRow['id']
+              ? DayEntryType.daily.name
+              : DayEntryType.additional.name,
+          'title': row['title'] ?? '',
+          'content': row['content'] ?? '',
+          'created_at': row['created_at'],
+          'updated_at': row['updated_at'],
+        }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+    }
+
+    final checkIns = await db.query('daily_checkins');
+    for (final checkIn in checkIns) {
+      await db.insert('journal_days', {
+        'date_key': checkIn['date_key'],
+        'gratitude': '',
+        'created_at': checkIn['created_at'],
+        'updated_at': checkIn['updated_at'],
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
+  }
 
   DatabaseFactory _platformFactory() {
     if (Platform.isWindows || Platform.isLinux) {
@@ -141,86 +215,79 @@ class DatabaseService {
     return p.join(directory.path, 'sotto.sqlite');
   }
 
-  Future<JournalEntry?> latestDraft() async {
+  Future<JournalDay> ensureDay(String dateKey, {DateTime? now}) async {
     final db = await database;
-    final rows = await db.query(
-      'journal_entries',
-      where: 'status = ?',
-      whereArgs: [EntryStatus.draft.name],
-      orderBy: 'updated_at DESC, id DESC',
-      limit: 1,
+    final existing = await journalDay(dateKey);
+    if (existing != null) return existing;
+    final day = JournalDay.empty(dateKey, now: now);
+    await db.insert(
+      'journal_days',
+      day.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.ignore,
     );
-    return rows.isEmpty ? null : _hydrate(rows.first);
+    return await journalDay(dateKey) ?? day;
   }
 
-  Future<JournalEntry?> latestEntry() async {
+  Future<JournalDay?> journalDay(String dateKey) async {
     final db = await database;
     final rows = await db.query(
-      'journal_entries',
-      orderBy: 'updated_at DESC, id DESC',
+      'journal_days',
+      where: 'date_key = ?',
+      whereArgs: [dateKey],
       limit: 1,
     );
-    return rows.isEmpty ? null : _hydrate(rows.first);
+    return rows.isEmpty ? null : JournalDay.fromMap(rows.first);
   }
 
-  Future<JournalEntry?> entryById(String id) async {
+  Future<void> saveDay(JournalDay day) async {
+    final db = await database;
+    final changed = await db.update(
+      'journal_days',
+      day.toMap(),
+      where: 'date_key = ?',
+      whereArgs: [day.dateKey],
+    );
+    if (changed == 0) await db.insert('journal_days', day.toMap());
+  }
+
+  Future<List<DayEntry>> entriesForDay(String dateKey) async {
     final db = await database;
     final rows = await db.query(
-      'journal_entries',
+      'day_entries',
+      where: 'date_key = ?',
+      whereArgs: [dateKey],
+      orderBy:
+          "CASE entry_type WHEN 'daily' THEN 0 ELSE 1 END, created_at DESC, id DESC",
+    );
+    return rows.map(DayEntry.fromMap).toList();
+  }
+
+  Future<DayEntry?> entryById(String id) async {
+    final db = await database;
+    final rows = await db.query(
+      'day_entries',
       where: 'id = ?',
       whereArgs: [id],
       limit: 1,
     );
-    return rows.isEmpty ? null : _hydrate(rows.first);
+    return rows.isEmpty ? null : DayEntry.fromMap(rows.first);
   }
 
-  Future<List<JournalEntry>> archivePage({
-    ArchiveCursor? cursor,
-    int limit = 30,
-  }) async {
+  Future<void> saveDayEntry(DayEntry entry) async {
     final db = await database;
-    final where = StringBuffer('status = ? AND closed_at IS NOT NULL');
-    final args = <Object?>[EntryStatus.closed.name];
-    if (cursor != null) {
-      where.write(' AND (closed_at < ? OR (closed_at = ? AND id < ?))');
-      final timestamp = cursor.closedAt.toIso8601String();
-      args.addAll([timestamp, timestamp, cursor.entryId]);
-    }
-    final rows = await db.query(
-      'journal_entries',
-      where: where.toString(),
-      whereArgs: args,
-      orderBy: 'closed_at DESC, id DESC',
-      limit: limit,
+    await ensureDay(entry.dateKey, now: entry.createdAt);
+    final changed = await db.update(
+      'day_entries',
+      entry.toMap(),
+      where: 'id = ?',
+      whereArgs: [entry.id],
     );
-    return Future.wait(rows.map(_hydrate));
+    if (changed == 0) await db.insert('day_entries', entry.toMap());
   }
 
-  Future<List<JournalEntry>> closedEntriesBetween(
-    DateTime start,
-    DateTime end,
-  ) async {
+  Future<void> deleteDayEntry(String id) async {
     final db = await database;
-    final rows = await db.query(
-      'journal_entries',
-      where: 'status = ? AND closed_at >= ? AND closed_at < ?',
-      whereArgs: [
-        EntryStatus.closed.name,
-        start.toUtc().toIso8601String(),
-        end.toUtc().toIso8601String(),
-      ],
-      orderBy: 'closed_at DESC, id DESC',
-    );
-    return Future.wait(rows.map(_hydrate));
-  }
-
-  Future<List<JournalEntry>> allEntries() async {
-    final db = await database;
-    final rows = await db.query(
-      'journal_entries',
-      orderBy: 'updated_at DESC, id DESC',
-    );
-    return Future.wait(rows.map(_hydrate));
+    await db.delete('day_entries', where: 'id = ?', whereArgs: [id]);
   }
 
   Future<DailyCheckIn?> checkInForDate(String dateKey) async {
@@ -234,22 +301,9 @@ class DatabaseService {
     return rows.isEmpty ? null : DailyCheckIn.fromMap(rows.first);
   }
 
-  Future<List<DailyCheckIn>> checkInsBetween(
-    String startDateKey,
-    String endDateKey,
-  ) async {
-    final db = await database;
-    final rows = await db.query(
-      'daily_checkins',
-      where: 'date_key >= ? AND date_key <= ?',
-      whereArgs: [startDateKey, endDateKey],
-      orderBy: 'date_key ASC',
-    );
-    return rows.map(DailyCheckIn.fromMap).toList();
-  }
-
   Future<void> saveCheckIn(DailyCheckIn checkIn) async {
     final db = await database;
+    await ensureDay(checkIn.dateKey, now: checkIn.createdAt);
     final existing = await checkInForDate(checkIn.dateKey);
     final row = checkIn.copyWith(updatedAt: DateTime.now().toUtc()).toMap();
     if (existing != null) {
@@ -262,48 +316,76 @@ class DatabaseService {
     );
   }
 
-  Future<JournalEntry> _hydrate(Map<String, Object?> row) async {
-    final db = await database;
-    final annotationRows = await db.query(
-      'ai_annotations',
-      where: 'entry_id = ?',
-      whereArgs: [row['id']],
-      orderBy: 'created_at ASC',
-    );
-    return JournalEntry.fromMap(
-      row,
-      annotations: annotationRows.map(AiAnnotation.fromMap).toList(),
+  Future<BinderDay> loadBinderDay(String dateKey, {bool create = false}) async {
+    final day = create
+        ? await ensureDay(dateKey)
+        : await journalDay(dateKey) ?? JournalDay.empty(dateKey);
+    final values = await Future.wait<Object?>([
+      entriesForDay(dateKey),
+      checkInForDate(dateKey),
+    ]);
+    return BinderDay(
+      day: day,
+      entries: values[0] as List<DayEntry>,
+      checkIn: values[1] as DailyCheckIn?,
     );
   }
 
-  Future<void> saveEntry(JournalEntry entry) async {
+  Future<List<BinderDay>> binderPage({
+    BinderCursor? cursor,
+    int limit = 20,
+  }) async {
     final db = await database;
-    await db.transaction((txn) async {
-      await txn.insert(
-        'journal_entries',
-        entry.toMap(),
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
-      for (final annotation in entry.annotations) {
-        await txn.insert(
-          'ai_annotations',
-          annotation.toMap(),
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        );
-      }
-    });
+    final where = StringBuffer('''
+      (trim(gratitude) != '' OR
+       EXISTS (SELECT 1 FROM day_entries e
+               WHERE e.date_key = journal_days.date_key
+                 AND (trim(e.content) != '' OR trim(e.title) != '')) OR
+       EXISTS (SELECT 1 FROM daily_checkins c
+               WHERE c.date_key = journal_days.date_key))
+    ''');
+    final args = <Object?>[];
+    if (cursor != null) {
+      where.write(' AND date_key < ?');
+      args.add(cursor.dateKey);
+    }
+    final rows = await db.query(
+      'journal_days',
+      where: where.toString(),
+      whereArgs: args,
+      orderBy: 'date_key DESC',
+      limit: limit,
+    );
+    return Future.wait(
+      rows.map((row) => loadBinderDay(row['date_key']! as String)),
+    );
   }
 
-  Future<void> deleteEntry(String id) async {
+  Future<EveningPreference> eveningPreference() async {
     final db = await database;
-    await db.delete('journal_entries', where: 'id = ?', whereArgs: [id]);
+    final rows = await db.query(
+      'app_settings',
+      where: 'setting_key = ?',
+      whereArgs: [eveningSettingKey],
+      limit: 1,
+    );
+    final value = rows.isEmpty
+        ? 18 * 60
+        : int.tryParse(rows.first['setting_value']! as String) ?? 18 * 60;
+    return EveningPreference(minutesAfterMidnight: value.clamp(0, 1439));
+  }
+
+  Future<void> saveEveningPreference(EveningPreference preference) async {
+    final db = await database;
+    await db.insert('app_settings', {
+      'setting_key': eveningSettingKey,
+      'setting_value': '${preference.minutesAfterMidnight.clamp(0, 1439)}',
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<void> close() async {
     final pendingDatabase = _databaseFuture;
     _databaseFuture = null;
-    if (pendingDatabase != null) {
-      await (await pendingDatabase).close();
-    }
+    if (pendingDatabase != null) await (await pendingDatabase).close();
   }
 }
