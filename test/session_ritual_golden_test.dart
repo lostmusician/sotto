@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sotto/models/journal_entry.dart';
@@ -51,9 +52,11 @@ void main() {
     );
     await controller.saveCurrentEntry();
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('entry-stack-toggle')));
+    await tester.pumpAndSettle();
     await expectLater(
       find.byType(EditorScreen),
-      matchesGoldenFile('goldens/entry_stack_narrow_desktop.png'),
+      matchesGoldenFile('goldens/entry_stack_expanded_narrow_desktop.png'),
     );
   });
 
@@ -62,6 +65,10 @@ void main() {
       tester,
       size: const Size(1180, 780),
     );
+    final rail = tester.widget<Listener>(find.byKey(const Key('binder-rail')));
+    rail.onPointerSignal!(const PointerScrollEvent(scrollDelta: Offset(0, 48)));
+    await tester.pump(const Duration(milliseconds: 120));
+    await tester.pumpAndSettle();
     await expectLater(
       find.byType(EditorScreen),
       matchesGoldenFile('goldens/binder_days_desktop.png'),
@@ -101,6 +108,21 @@ void main() {
       matchesGoldenFile('goldens/mood_large_text_high_contrast.png'),
     );
   });
+
+  testWidgets('journal large text and high contrast golden', (tester) async {
+    final harness = await _pumpGolden(
+      tester,
+      size: const Size(900, 800),
+      now: DateTime(2026, 9, 1, 10),
+      highContrast: true,
+      textScaler: const TextScaler.linear(1.35),
+    );
+    await _seedWriting(harness, tester);
+    await expectLater(
+      find.byType(EditorScreen),
+      matchesGoldenFile('goldens/journal_large_text_high_contrast.png'),
+    );
+  });
 }
 
 Future<void> _seedWriting(_GoldenHarness harness, WidgetTester tester) async {
@@ -123,7 +145,7 @@ Future<_GoldenHarness> _pumpCompletedBinder(
 }) async {
   final database = FakeDatabaseService();
   final now = DateTime(2026, 9, 1, 20);
-  for (var offset = 0; offset < 4; offset++) {
+  for (var offset = 0; offset < 12; offset++) {
     final date = now.subtract(Duration(days: offset * 2));
     final key = localDateKey(date);
     await database.saveDayEntry(
