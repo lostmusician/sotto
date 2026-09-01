@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -282,7 +284,7 @@ class _MoodView extends StatelessWidget {
   }
 }
 
-class _JournalView extends StatelessWidget {
+class _JournalView extends StatefulWidget {
   const _JournalView({
     required this.state,
     required this.titleController,
@@ -308,150 +310,178 @@ class _JournalView extends StatelessWidget {
   final Future<void> Function() onAddEntry;
   final Future<void> Function() onFinish;
 
+  @override
+  State<_JournalView> createState() => _JournalViewState();
+}
+
+class _JournalViewState extends State<_JournalView> {
+  bool _stackExpanded = false;
+
   void _moveSelection(int delta) {
-    final index = state.entries.indexWhere(
-      (entry) => entry.id == state.selectedEntryId,
+    final index = widget.state.entries.indexWhere(
+      (entry) => entry.id == widget.state.selectedEntryId,
     );
-    final next = (index + delta).clamp(0, state.entries.length - 1);
-    if (next != index) unawaited(onSelectEntry(state.entries[next].id));
+    final next = (index + delta).clamp(0, widget.state.entries.length - 1);
+    if (next != index) {
+      setState(() => _stackExpanded = false);
+      unawaited(widget.onSelectEntry(widget.state.entries[next].id));
+    }
+  }
+
+  Future<void> _selectEntry(String id) async {
+    setState(() => _stackExpanded = false);
+    await widget.onSelectEntry(id);
+  }
+
+  Future<void> _addEntry() async {
+    setState(() => _stackExpanded = false);
+    await widget.onAddEntry();
+  }
+
+  void _resumeWriting() {
+    if (_stackExpanded) setState(() => _stackExpanded = false);
+    widget.writingFocus.requestFocus();
   }
 
   @override
   Widget build(BuildContext context) {
-    final selected = state.selectedEntry;
+    final selected = widget.state.selectedEntry;
     if (selected == null) return const _LoadingView();
+    final compact = MediaQuery.sizeOf(context).width < 600;
+    final pagePadding = compact ? 20.0 : 48.0;
     final shortcuts = <ShortcutActivator, VoidCallback>{
       const SingleActivator(LogicalKeyboardKey.arrowUp, alt: true): () =>
           _moveSelection(-1),
       const SingleActivator(LogicalKeyboardKey.arrowDown, alt: true): () =>
           _moveSelection(1),
+      const SingleActivator(LogicalKeyboardKey.escape): () {
+        if (_stackExpanded) setState(() => _stackExpanded = false);
+      },
     };
+    final duration = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 180);
+
     return CallbackShortcuts(
       bindings: shortcuts,
       child: Focus(
         autofocus: true,
         child: ColoredBox(
-          color: const Color(0xFFF0ECE3),
+          key: const Key('full-page-journal'),
+          color: const Color(0xFFFFFCF5),
           child: SafeArea(
-            child: Column(
+            child: Stack(
               children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 12, 18, 6),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          _friendlyDate(state.selectedDateKey),
-                          style: const TextStyle(
-                            fontFamily: 'Georgia',
-                            fontSize: 23,
-                            fontWeight: FontWeight.w600,
-                          ),
+                Positioned.fill(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) => AnimatedSwitcher(
+                      duration: duration,
+                      transitionBuilder: (child, animation) => FadeTransition(
+                        opacity: animation,
+                        child: SlideTransition(
+                          position: Tween<Offset>(
+                            begin: const Offset(0, .018),
+                            end: Offset.zero,
+                          ).animate(animation),
+                          child: child,
                         ),
                       ),
-                      TextButton(
-                        key: const Key('finish-journal'),
-                        onPressed: onFinish,
-                        child: const Text('Done for now'),
-                      ),
-                    ],
-                  ),
-                ),
-                _EntryStack(
-                  entries: state.entries,
-                  selectedEntryId: selected.id,
-                  onSelected: onSelectEntry,
-                  onAdd: onAddEntry,
-                  onMove: _moveSelection,
-                ),
-                const SizedBox(height: 8),
-                Expanded(
-                  child: AnimatedSwitcher(
-                    duration: MediaQuery.disableAnimationsOf(context)
-                        ? Duration.zero
-                        : const Duration(milliseconds: 240),
-                    transitionBuilder: (child, animation) =>
-                        FadeTransition(opacity: animation, child: child),
-                    child: SingleChildScrollView(
-                      key: ValueKey(selected.id),
-                      padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
-                      child: Center(
-                        child: Container(
-                          constraints: const BoxConstraints(maxWidth: 780),
-                          padding: const EdgeInsets.fromLTRB(34, 28, 34, 34),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFFFCF5),
-                            borderRadius: BorderRadius.circular(24),
-                            boxShadow: const [
-                              BoxShadow(
-                                color: Color(0x18000000),
-                                blurRadius: 22,
-                                offset: Offset(0, 10),
-                              ),
-                            ],
+                      child: SingleChildScrollView(
+                        key: ValueKey(selected.id),
+                        padding: EdgeInsets.fromLTRB(
+                          pagePadding,
+                          82,
+                          pagePadding,
+                          48,
+                        ),
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            minHeight: math.max(0, constraints.maxHeight - 130),
                           ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              TextField(
-                                key: const Key('entry-title'),
-                                controller: titleController,
-                                onChanged: (_) => onEntryChanged(),
-                                decoration: InputDecoration(
-                                  border: InputBorder.none,
-                                  hintText: selected.type == DayEntryType.daily
-                                      ? 'Daily journal'
-                                      : _entryTime(selected),
-                                ),
-                                style: const TextStyle(
-                                  fontFamily: 'Georgia',
-                                  fontSize: 19,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              const Divider(),
-                              TextField(
-                                key: const Key('journal-editor'),
-                                controller: contentController,
-                                focusNode: writingFocus,
-                                autofocus: true,
-                                onChanged: (_) => onEntryChanged(),
-                                minLines: 12,
-                                maxLines: null,
-                                keyboardType: TextInputType.multiline,
-                                decoration: const InputDecoration(
-                                  border: InputBorder.none,
-                                  hintText: 'Start where you are…',
-                                ),
-                                style: const TextStyle(
-                                  fontFamily: 'Georgia',
-                                  fontSize: 24,
-                                  height: 1.55,
-                                ),
-                              ),
-                              if (selected.type == DayEntryType.daily) ...[
-                                const SizedBox(height: 34),
-                                Container(
-                                  padding: const EdgeInsets.all(20),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFF0EBD9),
-                                    borderRadius: BorderRadius.circular(18),
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      const Text(
+                          child: Align(
+                            alignment: Alignment.topCenter,
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 780),
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.translucent,
+                                onTap: _resumeWriting,
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    TextField(
+                                      key: const Key('entry-title'),
+                                      controller: widget.titleController,
+                                      onTap: _resumeWriting,
+                                      onChanged: (_) {
+                                        if (_stackExpanded) {
+                                          setState(
+                                            () => _stackExpanded = false,
+                                          );
+                                        }
+                                        widget.onEntryChanged();
+                                      },
+                                      decoration: InputDecoration(
+                                        border: InputBorder.none,
+                                        hintText:
+                                            selected.type == DayEntryType.daily
+                                            ? 'Daily journal'
+                                            : _entryTime(selected),
+                                      ),
+                                      style: const TextStyle(
+                                        fontFamily: 'Georgia',
+                                        fontSize: 19,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    const Divider(),
+                                    TextField(
+                                      key: const Key('journal-editor'),
+                                      controller: widget.contentController,
+                                      focusNode: widget.writingFocus,
+                                      autofocus: true,
+                                      onTap: _resumeWriting,
+                                      onChanged: (_) {
+                                        if (_stackExpanded) {
+                                          setState(
+                                            () => _stackExpanded = false,
+                                          );
+                                        }
+                                        widget.onEntryChanged();
+                                      },
+                                      minLines: compact ? 15 : 17,
+                                      maxLines: null,
+                                      keyboardType: TextInputType.multiline,
+                                      decoration: const InputDecoration(
+                                        border: InputBorder.none,
+                                        hintText: 'Start where you are…',
+                                      ),
+                                      style: const TextStyle(
+                                        fontFamily: 'Georgia',
+                                        fontSize: 24,
+                                        height: 1.55,
+                                      ),
+                                    ),
+                                    if (selected.type ==
+                                        DayEntryType.daily) ...[
+                                      const SizedBox(height: 42),
+                                      const Divider(),
+                                      const SizedBox(height: 18),
+                                      Text(
                                         'WHAT ARE YOU GRATEFUL FOR TODAY?',
                                         style: TextStyle(
                                           fontSize: 11,
                                           letterSpacing: 1.05,
+                                          color: Theme.of(
+                                            context,
+                                          ).colorScheme.onSurfaceVariant,
                                         ),
                                       ),
                                       TextField(
                                         key: const Key('gratitude-editor'),
-                                        controller: gratitudeController,
-                                        onChanged: onGratitudeChanged,
+                                        controller: widget.gratitudeController,
+                                        onTap: _resumeWriting,
+                                        onChanged: widget.onGratitudeChanged,
                                         minLines: 2,
                                         maxLines: 5,
                                         decoration: const InputDecoration(
@@ -460,14 +490,55 @@ class _JournalView extends StatelessWidget {
                                         ),
                                       ),
                                     ],
-                                  ),
+                                  ],
                                 ),
-                              ],
-                            ],
+                              ),
+                            ),
                           ),
                         ),
                       ),
                     ),
+                  ),
+                ),
+                Positioned(
+                  left: compact ? 14 : 22,
+                  top: 14,
+                  child: AnimatedBuilder(
+                    animation: widget.writingFocus,
+                    builder: (context, child) => AnimatedOpacity(
+                      duration: duration,
+                      opacity: widget.writingFocus.hasFocus
+                          ? compact
+                                ? .68
+                                : .34
+                          : .82,
+                      child: child,
+                    ),
+                    child: Text(
+                      _friendlyDate(widget.state.selectedDateKey),
+                      key: const Key('floating-journal-date'),
+                      style: const TextStyle(
+                        fontFamily: 'Georgia',
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: compact ? 8 : 16,
+                  top: 8,
+                  child: _EntryStack(
+                    entries: widget.state.entries,
+                    selectedEntryId: selected.id,
+                    writingFocus: widget.writingFocus,
+                    expanded: _stackExpanded,
+                    onToggle: () =>
+                        setState(() => _stackExpanded = !_stackExpanded),
+                    onSelected: _selectEntry,
+                    onAdd: _addEntry,
+                    onFinish: widget.onFinish,
+                    onMove: _moveSelection,
                   ),
                 ),
               ],
@@ -483,15 +554,23 @@ class _EntryStack extends StatefulWidget {
   const _EntryStack({
     required this.entries,
     required this.selectedEntryId,
+    required this.writingFocus,
+    required this.expanded,
+    required this.onToggle,
     required this.onSelected,
     required this.onAdd,
+    required this.onFinish,
     required this.onMove,
   });
 
   final List<DayEntry> entries;
   final String selectedEntryId;
+  final FocusNode writingFocus;
+  final bool expanded;
+  final VoidCallback onToggle;
   final Future<void> Function(String) onSelected;
   final Future<void> Function() onAdd;
+  final Future<void> Function() onFinish;
   final void Function(int) onMove;
 
   @override
@@ -499,136 +578,272 @@ class _EntryStack extends StatefulWidget {
 }
 
 class _EntryStackState extends State<_EntryStack> {
-  late final PageController _controller;
+  bool _hovering = false;
+  double _verticalDrag = 0;
 
   @override
-  void initState() {
-    super.initState();
-    final index = widget.entries.indexWhere(
+  Widget build(BuildContext context) {
+    final selectedIndex = widget.entries.indexWhere(
       (entry) => entry.id == widget.selectedEntryId,
     );
-    _controller = PageController(
-      initialPage: index < 0 ? 0 : index,
-      viewportFraction: .34,
-    );
-  }
+    final safeIndex = selectedIndex < 0 ? 0 : selectedIndex;
+    final selected = widget.entries[safeIndex];
+    final compact = MediaQuery.sizeOf(context).width < 600;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final highContrast = MediaQuery.highContrastOf(context);
+    final duration = reduceMotion
+        ? Duration.zero
+        : const Duration(milliseconds: 180);
 
-  @override
-  void didUpdateWidget(covariant _EntryStack oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.selectedEntryId == widget.selectedEntryId) return;
-    final index = widget.entries.indexWhere(
-      (entry) => entry.id == widget.selectedEntryId,
-    );
-    if (index >= 0 && _controller.hasClients) {
-      _controller.animateToPage(
-        index,
-        duration: MediaQuery.disableAnimationsOf(context)
-            ? Duration.zero
-            : const Duration(milliseconds: 180),
-        curve: Curves.easeOutCubic,
-      );
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-    height: 146,
-    child: Row(
-      children: [
-        const SizedBox(width: 18),
-        Expanded(
-          child: Listener(
-            key: const Key('entry-stack-wheel'),
-            onPointerSignal: (event) {
-              if (event is PointerScrollEvent && event.scrollDelta.dy != 0) {
-                widget.onMove(event.scrollDelta.dy > 0 ? 1 : -1);
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovering = true),
+      onExit: (_) => setState(() => _hovering = false),
+      child: AnimatedBuilder(
+        animation: widget.writingFocus,
+        builder: (context, child) {
+          final faded =
+              widget.writingFocus.hasFocus && !_hovering && !widget.expanded;
+          return AnimatedOpacity(
+            duration: duration,
+            opacity: highContrast
+                ? 1
+                : faded
+                ? compact
+                      ? .72
+                      : .34
+                : 1,
+            child: child,
+          );
+        },
+        child: Listener(
+          key: const Key('entry-stack-wheel'),
+          onPointerSignal: (event) {
+            if (event is PointerScrollEvent && event.scrollDelta.dy != 0) {
+              widget.onMove(event.scrollDelta.dy > 0 ? 1 : -1);
+            }
+          },
+          child: GestureDetector(
+            key: const Key('entry-stack'),
+            behavior: HitTestBehavior.opaque,
+            onVerticalDragStart: (_) => _verticalDrag = 0,
+            onVerticalDragUpdate: (details) {
+              _verticalDrag += details.primaryDelta ?? 0;
+            },
+            onVerticalDragEnd: (_) {
+              if (_verticalDrag.abs() > 20) {
+                widget.onMove(_verticalDrag < 0 ? 1 : -1);
               }
             },
-            child: PageView.builder(
-              key: const Key('entry-stack'),
-              controller: _controller,
-              scrollDirection: Axis.vertical,
-              padEnds: true,
-              itemCount: widget.entries.length,
-              onPageChanged: (index) =>
-                  widget.onSelected(widget.entries[index].id),
-              itemBuilder: (context, index) {
-                final entry = widget.entries[index];
-                final selected = entry.id == widget.selectedEntryId;
-                return Semantics(
-                  selected: selected,
-                  child: ExcludeSemantics(
-                    excluding: !selected,
-                    child: Transform.translate(
-                      offset: Offset(index.isEven ? 0 : 8, 0),
-                      child: Material(
-                        color: selected
-                            ? const Color(0xFFFFFCF5)
-                            : const Color(0xFFD9D5CB),
-                        elevation: selected ? 4 : 0,
-                        borderRadius: BorderRadius.circular(12),
-                        child: InkWell(
-                          key: Key('entry-slip-${entry.id}'),
-                          onTap: () => widget.onSelected(entry.id),
-                          borderRadius: BorderRadius.circular(12),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 8,
-                            ),
-                            child: Row(
-                              children: [
-                                Text(
-                                  entry.type == DayEntryType.daily
-                                      ? 'DAILY'
-                                      : _entryTime(entry),
-                                  style: const TextStyle(
-                                    fontSize: 10,
-                                    letterSpacing: .8,
-                                  ),
+            child: _GlassSurface(
+              child: SizedBox(
+                width: compact ? 220 : 284,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Semantics(
+                            button: true,
+                            expanded: widget.expanded,
+                            label:
+                                'Current entry, ${safeIndex + 1} of ${widget.entries.length}, ${_entryLabel(selected)}',
+                            onIncrease: () => widget.onMove(1),
+                            onDecrease: () => widget.onMove(-1),
+                            child: InkWell(
+                              key: const Key('entry-stack-toggle'),
+                              onTap: widget.onToggle,
+                              borderRadius: BorderRadius.circular(13),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 10,
                                 ),
-                                const SizedBox(width: 14),
-                                Expanded(
-                                  child: Text(
-                                    entry.title.trim().isNotEmpty
-                                        ? entry.title
-                                        : entry.content.trim().isEmpty
-                                        ? 'Untitled entry'
-                                        : entry.content.trim(),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        _entryLabel(selected),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                    Icon(
+                                      widget.expanded
+                                          ? Icons.expand_less_rounded
+                                          : Icons.expand_more_rounded,
+                                      size: 18,
+                                    ),
+                                  ],
                                 ),
-                              ],
+                              ),
                             ),
                           ),
                         ),
-                      ),
+                        _CompactAction(
+                          key: const Key('new-entry'),
+                          tooltip: 'New entry',
+                          onPressed: widget.onAdd,
+                          icon: Icons.add_rounded,
+                        ),
+                        _CompactAction(
+                          key: const Key('finish-journal'),
+                          tooltip: 'Done for now',
+                          onPressed: widget.onFinish,
+                          icon: Icons.check_rounded,
+                        ),
+                      ],
                     ),
-                  ),
-                );
-              },
+                    AnimatedSize(
+                      duration: duration,
+                      curve: Curves.easeOutCubic,
+                      child: widget.expanded
+                          ? ConstrainedBox(
+                              key: const Key('entry-stack-expanded'),
+                              constraints: const BoxConstraints(maxHeight: 150),
+                              child: ListView.builder(
+                                shrinkWrap: true,
+                                padding: const EdgeInsets.fromLTRB(6, 2, 6, 8),
+                                itemExtent: 46,
+                                itemCount: widget.entries.length,
+                                itemBuilder: (context, index) {
+                                  final entry = widget.entries[index];
+                                  final isSelected =
+                                      entry.id == widget.selectedEntryId;
+                                  return Semantics(
+                                    selected: isSelected,
+                                    button: true,
+                                    label: _entryLabel(entry),
+                                    child: InkWell(
+                                      key: Key('entry-slip-${entry.id}'),
+                                      onTap: () => widget.onSelected(entry.id),
+                                      borderRadius: BorderRadius.circular(11),
+                                      child: Container(
+                                        margin: EdgeInsets.only(
+                                          left: index.isEven ? 0 : 7,
+                                          bottom: 4,
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 11,
+                                          vertical: 8,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: isSelected
+                                              ? const Color(0xCCFFFFFF)
+                                              : const Color(0x66E3DED3),
+                                          borderRadius: BorderRadius.circular(
+                                            11,
+                                          ),
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Text(
+                                              entry.type == DayEntryType.daily
+                                                  ? 'DAILY'
+                                                  : _entryTime(entry),
+                                              style: const TextStyle(
+                                                fontSize: 9,
+                                                letterSpacing: .7,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 9),
+                                            Expanded(
+                                              child: Text(
+                                                _entryExcerpt(entry),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            )
+                          : const SizedBox.shrink(),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
         ),
-        const SizedBox(width: 10),
-        IconButton.filledTonal(
-          key: const Key('new-entry'),
-          tooltip: 'New entry',
-          onPressed: widget.onAdd,
-          icon: const Icon(Icons.add_rounded),
+      ),
+    );
+  }
+}
+
+class _GlassSurface extends StatelessWidget {
+  const _GlassSurface({required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => ClipRRect(
+    borderRadius: BorderRadius.circular(16),
+    child: BackdropFilter(
+      filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: MediaQuery.highContrastOf(context)
+              ? const Color(0xFFFFFCF5)
+              : const Color(0xCFFFFCF5),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0x4D4F4B56)),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x16000000),
+              blurRadius: 16,
+              offset: Offset(0, 7),
+            ),
+          ],
         ),
-        const SizedBox(width: 18),
-      ],
+        child: child,
+      ),
     ),
   );
+}
+
+class _CompactAction extends StatelessWidget {
+  const _CompactAction({
+    required this.tooltip,
+    required this.onPressed,
+    required this.icon,
+    super.key,
+  });
+
+  final String tooltip;
+  final Future<void> Function() onPressed;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+    tooltip: tooltip,
+    visualDensity: VisualDensity.compact,
+    constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+    onPressed: onPressed,
+    icon: Icon(icon, size: 19),
+  );
+}
+
+String _entryLabel(DayEntry entry) {
+  if (entry.type == DayEntryType.daily) return 'Daily Journal';
+  if (entry.title.trim().isNotEmpty) return entry.title.trim();
+  return _entryTime(entry);
+}
+
+String _entryExcerpt(DayEntry entry) {
+  if (entry.title.trim().isNotEmpty) return entry.title.trim();
+  if (entry.content.trim().isNotEmpty) return entry.content.trim();
+  return 'Untitled entry';
 }
 
 String _entryTime(DayEntry entry) {
