@@ -1,192 +1,212 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sotto/models/journal_entry.dart';
 import 'package:sotto/providers/journal_providers.dart';
-import 'package:sotto/services/ai_service.dart';
-import 'package:sotto/services/database_service.dart';
 import 'package:sotto/ui/editor_screen.dart';
 
 import 'support/session_test_doubles.dart';
 
 void main() {
-  testWidgets('arrival supports accessible mood controls and begins writing', (
+  testWidgets('journal defaults to the daily entry with gratitude footer', (
     tester,
   ) async {
-    final harness = await _pumpHarness(tester);
+    final harness = await _pumpHarness(tester, now: DateTime(2026, 9, 1, 10));
 
-    expect(find.byKey(const Key('mood-dial')), findsOneWidget);
-    final toneSlider = tester.widget<Slider>(
-      find.byKey(const Key('mood-tone-slider')),
-    );
-    toneSlider.onChanged!(.42);
-    await tester.pump();
-    await _pressButton(tester, find.byKey(const Key('begin-session')));
-    await tester.pumpAndSettle();
-
+    expect(find.byKey(const Key('entry-stack')), findsOneWidget);
+    expect(find.text('DAILY'), findsOneWidget);
+    expect(find.byKey(const Key('journal-editor')), findsOneWidget);
+    expect(find.byKey(const Key('gratitude-editor')), findsOneWidget);
     expect(
       harness.container.read(journalControllerProvider).phase,
-      SessionPhase.writing,
-    );
-    expect(find.byKey(const Key('journal-editor')), findsOneWidget);
-    expect(
-      harness.container.read(journalControllerProvider).todayCheckIn,
-      isNotNull,
-    );
-    expect(
-      harness.container.read(journalControllerProvider).isLoading,
-      isFalse,
+      AppPhase.journal,
     );
   });
 
-  testWidgets('unfinished draft is offered on arrival', (tester) async {
-    final database = _memoryDatabase();
-    await database.saveEntry(
-      JournalEntry.empty().copyWith(content: 'An unfinished thought.'),
-    );
-    await _pumpHarness(tester, database: database);
-
-    expect(find.text('Continue previous session'), findsOneWidget);
-    expect(find.text('3 words are waiting for you.'), findsOneWidget);
-  });
-
-  testWidgets('writing never triggers reflection until manual close', (
+  testWidgets('new entry is separate and does not show gratitude', (
     tester,
   ) async {
-    final reflection = _CountingReflectionService();
-    final harness = await _pumpHarness(tester, reflection: reflection);
-    await _pressButton(tester, find.byKey(const Key('begin-session')));
+    final harness = await _pumpHarness(tester, now: DateTime(2026, 9, 1, 10));
+    await tester.tap(find.byKey(const Key('new-entry')));
     await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('gratitude-editor')), findsNothing);
+    await tester.enterText(find.byKey(const Key('entry-title')), 'Afternoon');
     await tester.enterText(
       find.byKey(const Key('journal-editor')),
-      'This is enough writing to have once triggered the old idle prompt.',
+      'A second thought.',
     );
-    await tester.pump(const Duration(seconds: 12));
+    await tester.pump(const Duration(milliseconds: 750));
 
-    expect(reflection.calls, 0);
-    expect(find.byKey(const Key('reflection-reply')), findsNothing);
+    final state = harness.container.read(journalControllerProvider);
+    expect(state.entries, hasLength(2));
+    expect(state.selectedEntry?.type, DayEntryType.additional);
+  });
 
-    await _pressButton(tester, find.byKey(const Key('close-session')));
+  testWidgets('keyboard, wheel, and touch move through the entry stack', (
+    tester,
+  ) async {
+    final harness = await _pumpHarness(tester, now: DateTime(2026, 9, 1, 10));
+    await harness.container.read(journalControllerProvider.notifier).addEntry();
+    harness.container
+        .read(journalControllerProvider.notifier)
+        .updateEntry(content: 'Keep this additional entry.');
+    await tester.pumpAndSettle();
+    expect(
+      harness.container.read(journalControllerProvider).selectedEntry?.type,
+      DayEntryType.additional,
+    );
+
+    await tester.tap(find.byKey(const Key('journal-editor')));
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
     await tester.pumpAndSettle();
 
-    expect(reflection.calls, 1);
-    expect(find.byKey(const Key('reflection-reply')), findsOneWidget);
     expect(
-      harness.container.read(journalControllerProvider).isReflecting,
-      isFalse,
+      harness.container.read(journalControllerProvider).selectedEntry?.type,
+      DayEntryType.daily,
+    );
+
+    final stackListener = tester.widget<Listener>(
+      find.byKey(const Key('entry-stack-wheel')),
+    );
+    stackListener.onPointerSignal!(
+      const PointerScrollEvent(scrollDelta: Offset(0, 24)),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      harness.container.read(journalControllerProvider).selectedEntry?.type,
+      DayEntryType.additional,
+    );
+
+    await tester.drag(
+      find.byKey(const Key('entry-stack')),
+      const Offset(0, 100),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      harness.container.read(journalControllerProvider).selectedEntry?.type,
+      DayEntryType.daily,
     );
   });
 
-  testWidgets('failed reflection falls back and session can finish', (
+  testWidgets('completed journal before evening shows binder mood reminder', (
     tester,
   ) async {
+    final database = FakeDatabaseService();
+    await database.saveDayEntry(
+      DayEntry.empty(
+        dateKey: '2026-09-01',
+        type: DayEntryType.daily,
+      ).copyWith(content: 'Already written.'),
+    );
+    await _pumpHarness(
+      tester,
+      database: database,
+      now: DateTime(2026, 9, 1, 12),
+    );
+
+    expect(find.byKey(const Key('mood-reminder')), findsOneWidget);
+    expect(find.byType(PageView), findsOneWidget);
+  });
+
+  testWidgets('binder exposes journal, additional entry, and mood actions', (
+    tester,
+  ) async {
+    final database = FakeDatabaseService();
+    const dateKey = '2026-09-01';
+    await database.saveDayEntry(
+      DayEntry.empty(
+        dateKey: dateKey,
+        type: DayEntryType.daily,
+      ).copyWith(content: 'A finished day.'),
+    );
+    await database.saveCheckIn(
+      DailyCheckIn.forDate(dateKey: dateKey, moodAngle: .2, moodIntensity: .6),
+    );
     final harness = await _pumpHarness(
       tester,
-      reflection: _FailingReflectionService(),
+      database: database,
+      now: DateTime(2026, 9, 1, 20),
     );
-    await _pressButton(tester, find.byKey(const Key('begin-session')));
-    await tester.pumpAndSettle();
-    await tester.enterText(
-      find.byKey(const Key('journal-editor')),
-      'Today felt more difficult than I expected.',
-    );
-    await _pressButton(tester, find.byKey(const Key('close-session')));
-    await tester.pumpAndSettle();
 
-    expect(find.text('Local fallback reflection'), findsOneWidget);
-    await tester.enterText(
-      find.byKey(const Key('reflection-reply')),
-      'I can be gentler tomorrow.',
-    );
-    await _pressButton(tester, find.byKey(const Key('finish-session')));
-    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('edit-journal')), findsOneWidget);
+    expect(find.byKey(const Key('add-entry')), findsOneWidget);
+    expect(find.byKey(const Key('edit-mood')), findsOneWidget);
 
-    expect(find.text('Your days'), findsOneWidget);
+    await tester.tap(find.text('Weeks'));
+    await tester.pumpAndSettle();
     expect(
-      harness.container.read(journalControllerProvider).phase,
-      SessionPhase.archive,
+      harness.container.read(binderControllerProvider).zoom,
+      BinderZoom.weeks,
+    );
+
+    final binderCenter = tester.getCenter(
+      find.byKey(const Key('binder-pages')),
+    );
+    final firstFinger = await tester.startGesture(
+      binderCenter - const Offset(30, 0),
+      pointer: 1,
+    );
+    final secondFinger = await tester.startGesture(
+      binderCenter + const Offset(30, 0),
+      pointer: 2,
+    );
+    await firstFinger.moveTo(binderCenter - const Offset(80, 0));
+    await secondFinger.moveTo(binderCenter + const Offset(80, 0));
+    await firstFinger.up();
+    await secondFinger.up();
+    await tester.pumpAndSettle();
+    expect(
+      harness.container.read(binderControllerProvider).zoom,
+      BinderZoom.days,
+    );
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.minus);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+    expect(
+      harness.container.read(binderControllerProvider).zoom,
+      BinderZoom.weeks,
     );
   });
 
-  testWidgets('archive zoom changes while preserving scroll context', (
+  testWidgets('evening launch opens mood and continues to journal', (
     tester,
   ) async {
-    final database = _memoryDatabase();
-    final now = DateTime.utc(2026, 8, 31, 12);
-    for (var index = 0; index < 36; index++) {
-      final closedAt = now.subtract(Duration(days: index));
-      await database.saveEntry(
-        JournalEntry.empty(now: closedAt).copyWith(
-          content: 'A closed journal entry number $index with a few words.',
-          status: EntryStatus.closed,
-          closedAt: closedAt,
-        ),
-      );
-    }
-    final harness = await _pumpHarness(tester, database: database);
-    await _tapVisible(tester, find.byKey(const Key('arrival-archive')));
+    final harness = await _pumpHarness(tester, now: DateTime(2026, 9, 1, 18));
+
+    expect(find.byKey(const Key('mood-dial')), findsOneWidget);
+    final slider = tester.widget<Slider>(
+      find.byKey(const Key('mood-tone-slider')),
+    );
+    slider.onChanged!(.5);
+    await tester.pump();
+    final button = tester.widget<FilledButton>(
+      find.byKey(const Key('finish-mood')),
+    );
+    button.onPressed!();
     await tester.pumpAndSettle();
 
-    final scrollable = find.byType(CustomScrollView);
-    await tester.drag(scrollable, const Offset(0, -700));
-    await tester.pumpAndSettle();
-    final beforePosition = tester
-        .state<ScrollableState>(
-          find.descendant(of: scrollable, matching: find.byType(Scrollable)),
-        )
-        .position;
-    final beforeProgress =
-        beforePosition.pixels / beforePosition.maxScrollExtent;
-
-    await _tapVisible(tester, find.text('Weeks'));
-    await tester.pumpAndSettle();
-    final afterPosition = tester
-        .state<ScrollableState>(
-          find.descendant(of: scrollable, matching: find.byType(Scrollable)),
-        )
-        .position;
-    final afterProgress = afterPosition.pixels / afterPosition.maxScrollExtent;
-
-    expect(afterPosition.pixels, greaterThan(0));
-    expect((afterProgress - beforeProgress).abs(), lessThan(.02));
     expect(
-      harness.container.read(archiveControllerProvider).zoom,
-      ArchiveZoom.weeks,
+      harness.container.read(journalControllerProvider).phase,
+      AppPhase.journal,
     );
   });
 }
-
-Future<void> _tapVisible(WidgetTester tester, Finder finder) async {
-  await tester.ensureVisible(finder);
-  await tester.pumpAndSettle();
-  await tester.tap(finder);
-}
-
-Future<void> _pressButton(WidgetTester tester, Finder finder) async {
-  final button = tester.widget<ButtonStyleButton>(finder);
-  expect(button.onPressed, isNotNull);
-  button.onPressed!();
-  await tester.runAsync(
-    () => Future<void>.delayed(const Duration(milliseconds: 20)),
-  );
-  await tester.pump();
-}
-
-DatabaseService _memoryDatabase() => FakeDatabaseService();
 
 Future<_Harness> _pumpHarness(
   WidgetTester tester, {
-  DatabaseService? database,
-  ReflectionService? reflection,
+  required DateTime now,
+  FakeDatabaseService? database,
 }) async {
-  final db = database ?? _memoryDatabase();
+  final db = database ?? FakeDatabaseService();
   final container = ProviderContainer(
-    overrides: [
-      databaseServiceProvider.overrideWithValue(db),
-      reflectionServiceProvider.overrideWithValue(
-        reflection ?? _CountingReflectionService(),
-      ),
-    ],
+    overrides: [databaseServiceProvider.overrideWithValue(db)],
   );
   await tester.pumpWidget(
     UncontrolledProviderScope(
@@ -195,7 +215,7 @@ Future<_Harness> _pumpHarness(
     ),
   );
   await tester.pump();
-  await container.read(journalControllerProvider.notifier).initialize();
+  await container.read(journalControllerProvider.notifier).initialize(now: now);
   await tester.pumpAndSettle();
   final harness = _Harness(container, db);
   addTearDown(harness.dispose);
@@ -205,7 +225,7 @@ Future<_Harness> _pumpHarness(
 class _Harness {
   _Harness(this.container, this.database);
   final ProviderContainer container;
-  final DatabaseService database;
+  final FakeDatabaseService database;
   bool _disposed = false;
 
   Future<void> dispose() async {
@@ -214,23 +234,4 @@ class _Harness {
     container.dispose();
     await database.close();
   }
-}
-
-class _CountingReflectionService implements ReflectionService {
-  int calls = 0;
-
-  @override
-  Future<ReflectionResult> reflectOn(String text) async {
-    calls++;
-    return const ReflectionResult(
-      question: 'What deserves more of your attention?',
-      isDemo: false,
-    );
-  }
-}
-
-class _FailingReflectionService implements ReflectionService {
-  @override
-  Future<ReflectionResult> reflectOn(String text) =>
-      Future.error(StateError('local model unavailable'));
 }

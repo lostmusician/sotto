@@ -1,19 +1,55 @@
 import 'package:sotto/models/journal_entry.dart';
-import 'package:sotto/services/ai_service.dart';
 import 'package:sotto/services/database_service.dart';
 
 class FakeDatabaseService extends DatabaseService {
-  final Map<String, JournalEntry> entries = {};
+  final Map<String, JournalDay> days = {};
+  final Map<String, DayEntry> entries = {};
   final Map<String, DailyCheckIn> checkIns = {};
+  EveningPreference preference = const EveningPreference();
+  bool failEntrySaves = false;
 
   @override
-  Future<JournalEntry?> latestDraft() async {
-    final drafts =
-        entries.values
-            .where((entry) => entry.status == EntryStatus.draft)
-            .toList()
-          ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-    return drafts.firstOrNull;
+  Future<JournalDay> ensureDay(String dateKey, {DateTime? now}) async =>
+      days.putIfAbsent(dateKey, () => JournalDay.empty(dateKey, now: now));
+
+  @override
+  Future<JournalDay?> journalDay(String dateKey) async => days[dateKey];
+
+  @override
+  Future<void> saveDay(JournalDay day) async {
+    days[day.dateKey] = day;
+  }
+
+  @override
+  Future<List<DayEntry>> entriesForDay(String dateKey) async {
+    final values =
+        entries.values.where((entry) => entry.dateKey == dateKey).toList()
+          ..sort((a, b) {
+            if (a.type != b.type) return a.type == DayEntryType.daily ? -1 : 1;
+            return b.createdAt.compareTo(a.createdAt);
+          });
+    return values;
+  }
+
+  @override
+  Future<void> saveDayEntry(DayEntry entry) async {
+    if (failEntrySaves) throw StateError('entry save failed');
+    await ensureDay(entry.dateKey, now: entry.createdAt);
+    if (entry.type == DayEntryType.daily &&
+        entries.values.any(
+          (existing) =>
+              existing.id != entry.id &&
+              existing.dateKey == entry.dateKey &&
+              existing.type == DayEntryType.daily,
+        )) {
+      throw StateError('daily entry already exists');
+    }
+    entries[entry.id] = entry;
+  }
+
+  @override
+  Future<void> deleteDayEntry(String id) async {
+    entries.remove(id);
   }
 
   @override
@@ -21,65 +57,49 @@ class FakeDatabaseService extends DatabaseService {
       checkIns[dateKey];
 
   @override
-  Future<void> saveEntry(JournalEntry entry) async {
-    entries[entry.id] = entry;
-  }
-
-  @override
   Future<void> saveCheckIn(DailyCheckIn checkIn) async {
+    await ensureDay(checkIn.dateKey, now: checkIn.createdAt);
     checkIns[checkIn.dateKey] = checkIn;
   }
 
   @override
-  Future<List<JournalEntry>> archivePage({
-    ArchiveCursor? cursor,
-    int limit = 30,
-  }) async {
-    final closedEntries =
-        entries.values
-            .where(
-              (entry) =>
-                  entry.status == EntryStatus.closed && entry.closedAt != null,
-            )
-            .toList()
-          ..sort((a, b) {
-            final timeOrder = b.closedAt!.compareTo(a.closedAt!);
-            return timeOrder != 0 ? timeOrder : b.id.compareTo(a.id);
-          });
-    final filtered = cursor == null
-        ? closedEntries
-        : closedEntries.where((entry) {
-            final timeOrder = entry.closedAt!.compareTo(cursor.closedAt);
-            return timeOrder < 0 ||
-                (timeOrder == 0 && entry.id.compareTo(cursor.entryId) < 0);
-          }).toList();
-    return filtered.take(limit).toList();
+  Future<BinderDay> loadBinderDay(String dateKey, {bool create = false}) async {
+    final day = create
+        ? await ensureDay(dateKey)
+        : days[dateKey] ?? JournalDay.empty(dateKey);
+    return BinderDay(
+      day: day,
+      entries: await entriesForDay(dateKey),
+      checkIn: checkIns[dateKey],
+    );
   }
 
   @override
-  Future<List<DailyCheckIn>> checkInsBetween(
-    String startDateKey,
-    String endDateKey,
-  ) async => checkIns.values
-      .where(
-        (checkIn) =>
-            checkIn.dateKey.compareTo(startDateKey) >= 0 &&
-            checkIn.dateKey.compareTo(endDateKey) <= 0,
-      )
-      .toList();
+  Future<List<BinderDay>> binderPage({
+    BinderCursor? cursor,
+    int limit = 20,
+  }) async {
+    final keys = days.keys.where((key) {
+      if (cursor != null && key.compareTo(cursor.dateKey) >= 0) return false;
+      final day = days[key]!;
+      final hasEntry = entries.values.any(
+        (entry) => entry.dateKey == key && !entry.isEmpty,
+      );
+      return day.gratitude.trim().isNotEmpty ||
+          hasEntry ||
+          checkIns.containsKey(key);
+    }).toList()..sort((a, b) => b.compareTo(a));
+    return Future.wait(keys.take(limit).map(loadBinderDay));
+  }
+
+  @override
+  Future<EveningPreference> eveningPreference() async => preference;
+
+  @override
+  Future<void> saveEveningPreference(EveningPreference value) async {
+    preference = value;
+  }
 
   @override
   Future<void> close() async {}
-}
-
-class FixedReflectionService implements ReflectionService {
-  const FixedReflectionService({
-    this.question = 'What deserves more of your attention?',
-  });
-
-  final String question;
-
-  @override
-  Future<ReflectionResult> reflectOn(String text) async =>
-      ReflectionResult(question: question, isDemo: false);
 }

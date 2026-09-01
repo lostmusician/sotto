@@ -6,163 +6,194 @@ import 'package:sotto/services/database_service.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
-  late DatabaseService database;
-
   setUpAll(sqfliteFfiInit);
 
+  late DatabaseService database;
   setUp(() {
     database = DatabaseService(
       factory: databaseFactoryFfi,
       databasePath: inMemoryDatabasePath,
     );
   });
-
   tearDown(() => database.close());
 
-  test('persists entry ritual fields and annotations', () async {
-    final now = DateTime.utc(2026, 8, 31, 10);
-    final entry = JournalEntry.empty(now: now).copyWith(
-      content: 'A private thought.',
-      status: EntryStatus.closed,
-      closedAt: now,
-      reflectionQuestion: 'What matters beneath this thought?',
-      reflectionReply: 'I want to be honest.',
-    );
-    final annotation = AiAnnotation.create(
-      entryId: entry.id,
-      question: 'What matters beneath this thought?',
-      anchorOffset: entry.content.length,
-    );
-
-    await database.saveEntry(entry.copyWith(annotations: [annotation]));
-    final loaded = await database.entryById(entry.id);
-
-    expect(loaded?.status, EntryStatus.closed);
-    expect(loaded?.reflectionReply, 'I want to be honest.');
-    expect(loaded?.annotations.single.question, annotation.question);
-  });
-
   test(
-    'replaces one daily check-in without replacing its creation time',
+    'stores one daily entry, additional entries, gratitude, and mood',
     () async {
-      final created = DateTime.utc(2026, 8, 31, 1);
-      final first = DailyCheckIn.today(
-        moodAngle: .2,
-        moodIntensity: .4,
-        now: created,
-      );
-      await database.saveCheckIn(first);
+      const dateKey = '2026-09-01';
+      final day = JournalDay.empty(dateKey).copyWith(gratitude: 'Warm tea.');
+      final daily = DayEntry.empty(
+        dateKey: dateKey,
+        type: DayEntryType.daily,
+      ).copyWith(content: 'The main thought.');
+      final additional = DayEntry.empty(
+        dateKey: dateKey,
+        type: DayEntryType.additional,
+      ).copyWith(content: 'A later thought.');
+      await database.saveDay(day);
+      await database.saveDayEntry(daily);
+      await database.saveDayEntry(additional);
       await database.saveCheckIn(
-        first.copyWith(
-          moodAngle: .8,
+        DailyCheckIn.forDate(
+          dateKey: dateKey,
+          moodAngle: .3,
           moodIntensity: .7,
-          updatedAt: created.add(const Duration(hours: 4)),
         ),
       );
 
-      final loaded = await database.checkInForDate(first.dateKey);
-      expect(loaded?.moodAngle, .8);
-      expect(loaded?.moodIntensity, .7);
-      expect(loaded?.createdAt, created);
+      final loaded = await database.loadBinderDay(dateKey);
+
+      expect(loaded.dailyEntry?.content, 'The main thought.');
+      expect(loaded.additionalEntries.single.content, 'A later thought.');
+      expect(loaded.day.gratitude, 'Warm tea.');
+      expect(loaded.isComplete, isTrue);
     },
   );
 
-  test('archive pagination uses closed_at and id as a stable cursor', () async {
-    final closedAt = DateTime.utc(2026, 8, 31, 12);
-    for (final id in ['c', 'b', 'a']) {
-      await database.saveEntry(
-        JournalEntry(
-          id: id,
-          title: id,
-          content: 'Entry $id',
-          createdAt: closedAt,
-          updatedAt: closedAt,
-          targetWordCount: 500,
-          status: EntryStatus.closed,
-          closedAt: closedAt,
-        ),
+  test('enforces one daily entry per date', () async {
+    const dateKey = '2026-09-01';
+    await database.saveDayEntry(
+      DayEntry.empty(dateKey: dateKey, type: DayEntryType.daily),
+    );
+
+    expect(
+      () => database.saveDayEntry(
+        DayEntry.empty(dateKey: dateKey, type: DayEntryType.daily),
+      ),
+      throwsA(anything),
+    );
+  });
+
+  test('paginates recorded dates with a stable date cursor', () async {
+    for (var day = 1; day <= 24; day++) {
+      final key = '2026-08-${day.toString().padLeft(2, '0')}';
+      await database.saveDayEntry(
+        DayEntry.empty(
+          dateKey: key,
+          type: DayEntryType.daily,
+        ).copyWith(content: 'Entry $day'),
       );
     }
 
-    final first = await database.archivePage(limit: 2);
-    final second = await database.archivePage(
-      cursor: ArchiveCursor(
-        closedAt: first.last.closedAt!,
-        entryId: first.last.id,
-      ),
-      limit: 2,
+    final first = await database.binderPage(limit: 10);
+    final second = await database.binderPage(
+      cursor: BinderCursor(first.last.day.dateKey),
+      limit: 10,
     );
 
-    expect(first.map((entry) => entry.id), ['c', 'b']);
-    expect(second.map((entry) => entry.id), ['a']);
+    expect(first, hasLength(10));
+    expect(second, hasLength(10));
+    expect(
+      first.last.day.dateKey.compareTo(second.first.day.dateKey),
+      greaterThan(0),
+    );
+    expect({
+      ...first.map((day) => day.day.dateKey),
+      ...second.map((day) => day.day.dateKey),
+    }, hasLength(20));
   });
 
-  test('date range query excludes the end boundary', () async {
-    final day = DateTime.utc(2026, 8, 31);
-    for (var index = 0; index < 3; index++) {
-      final closed = day.add(Duration(days: index));
-      await database.saveEntry(
-        JournalEntry.empty(now: closed).copyWith(
-          content: 'Day $index',
-          status: EntryStatus.closed,
-          closedAt: closed,
+  test('replaces the evening preference', () async {
+    await database.saveEveningPreference(
+      const EveningPreference(minutesAfterMidnight: 20 * 60 + 15),
+    );
+
+    final loaded = await database.eveningPreference();
+
+    expect(loaded.hour, 20);
+    expect(loaded.minute, 15);
+  });
+
+  test('includes a mood-only day in recorded-date pagination', () async {
+    const dateKey = '2026-08-30';
+    await database.saveCheckIn(
+      DailyCheckIn.forDate(dateKey: dateKey, moodAngle: .7, moodIntensity: .4),
+    );
+
+    final page = await database.binderPage();
+
+    expect(page.single.day.dateKey, dateKey);
+    expect(page.single.entries, isEmpty);
+    expect(page.single.checkIn, isNotNull);
+  });
+
+  test(
+    'migrates v2 entries into separate day entries and preserves legacy rows',
+    () async {
+      final directory = await Directory.systemTemp.createTemp('sotto-v3-');
+      addTearDown(() => directory.delete(recursive: true));
+      final path = '${directory.path}/legacy.sqlite';
+      final legacy = await databaseFactoryFfi.openDatabase(
+        path,
+        options: OpenDatabaseOptions(
+          version: 2,
+          onCreate: (db, version) async {
+            await db.execute('''
+            CREATE TABLE journal_entries (
+              id TEXT PRIMARY KEY, title TEXT NOT NULL, content TEXT NOT NULL,
+              created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+              target_word_count INTEGER NOT NULL DEFAULT 500,
+              status TEXT NOT NULL DEFAULT 'draft', closed_at TEXT,
+              reflection_question TEXT, reflection_reply TEXT NOT NULL DEFAULT ''
+            )
+          ''');
+            await db.execute('''
+            CREATE TABLE ai_annotations (
+              id TEXT PRIMARY KEY, entry_id TEXT NOT NULL, question TEXT NOT NULL,
+              anchor_offset INTEGER NOT NULL, created_at TEXT NOT NULL
+            )
+          ''');
+            await db.execute('''
+            CREATE TABLE daily_checkins (
+              date_key TEXT PRIMARY KEY, mood_angle REAL NOT NULL,
+              mood_intensity REAL NOT NULL, created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            )
+          ''');
+          },
         ),
       );
-    }
+      final morning = DateTime(2026, 9, 1, 2).toUtc().toIso8601String();
+      final evening = DateTime(2026, 9, 1, 11).toUtc().toIso8601String();
+      await legacy.insert(
+        'journal_entries',
+        _legacyRow('first', 'Morning', morning),
+      );
+      await legacy.insert(
+        'journal_entries',
+        _legacyRow('second', 'Evening', evening),
+      );
+      await legacy.close();
 
-    final entries = await database.closedEntriesBetween(
-      day,
-      day.add(const Duration(days: 2)),
-    );
-    expect(entries, hasLength(2));
-  });
+      final migrated = DatabaseService(
+        factory: databaseFactoryFfi,
+        databasePath: path,
+      );
+      final dateKey = localDateKey(DateTime.parse(morning));
+      final day = await migrated.loadBinderDay(dateKey);
+      final legacyRows = await (await migrated.database).rawQuery(
+        'SELECT count(*) AS total FROM journal_entries',
+      );
+      final legacyCount = legacyRows.single['total'] as int;
 
-  test('migrates a version-one database without losing reflection data', () async {
-    final directory = await Directory.systemTemp.createTemp('sotto-migration-');
-    final path = '${directory.path}/legacy.sqlite';
-    final legacy = await databaseFactoryFfi.openDatabase(
-      path,
-      options: OpenDatabaseOptions(
-        version: 1,
-        onCreate: (db, version) async {
-          await db.execute(
-            'CREATE TABLE journal_entries (id TEXT PRIMARY KEY, title TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, target_word_count INTEGER NOT NULL DEFAULT 500)',
-          );
-          await db.execute(
-            'CREATE TABLE ai_annotations (id TEXT PRIMARY KEY, entry_id TEXT NOT NULL, question TEXT NOT NULL, anchor_offset INTEGER NOT NULL, created_at TEXT NOT NULL)',
-          );
-        },
-      ),
-    );
-    final timestamp = DateTime.utc(2026, 8, 30).toIso8601String();
-    await legacy.insert('journal_entries', {
-      'id': 'legacy',
-      'title': 'Old entry',
-      'content': 'Something worth keeping',
+      expect(day.dailyEntry?.id, 'first');
+      expect(day.additionalEntries.single.id, 'second');
+      expect(legacyCount, 2);
+      await migrated.close();
+    },
+  );
+}
+
+Map<String, Object?> _legacyRow(String id, String content, String timestamp) =>
+    {
+      'id': id,
+      'title': 'Untitled entry',
+      'content': content,
       'created_at': timestamp,
       'updated_at': timestamp,
       'target_word_count': 500,
-    });
-    await legacy.insert('ai_annotations', {
-      'id': 'annotation',
-      'entry_id': 'legacy',
-      'question': 'What are you protecting?',
-      'anchor_offset': 24,
-      'created_at': timestamp,
-    });
-    await legacy.close();
-
-    final migrated = DatabaseService(
-      factory: databaseFactoryFfi,
-      databasePath: path,
-    );
-    final entry = await migrated.entryById('legacy');
-
-    expect(entry?.status, EntryStatus.closed);
-    expect(entry?.closedAt, DateTime.parse(timestamp));
-    expect(entry?.reflectionQuestion, 'What are you protecting?');
-
-    await migrated.close();
-    await directory.delete(recursive: true);
-  });
-}
+      'status': 'closed',
+      'closed_at': timestamp,
+      'reflection_question': 'Legacy question?',
+      'reflection_reply': '',
+    };

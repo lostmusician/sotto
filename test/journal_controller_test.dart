@@ -1,195 +1,171 @@
-import 'dart:async';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sotto/models/journal_entry.dart';
 import 'package:sotto/providers/journal_providers.dart';
-import 'package:sotto/services/ai_service.dart';
-import 'package:sotto/services/database_service.dart';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'support/session_test_doubles.dart';
 
 void main() {
-  setUpAll(sqfliteFfiInit);
-
-  test('runs the complete ritual through explicit transitions', () async {
-    final database = DatabaseService(
-      factory: databaseFactoryFfi,
-      databasePath: inMemoryDatabasePath,
-    );
-    final controller = JournalController(database, _FixedReflectionService());
-    final now = DateTime(2026, 8, 31, 18);
+  test('before evening opens an empty daily journal', () async {
+    final database = FakeDatabaseService();
+    final controller = JournalController(database);
+    final now = DateTime(2026, 9, 1, 10);
 
     await controller.initialize(now: now);
+
+    expect(controller.state.phase, AppPhase.journal);
+    expect(controller.state.selectedEntry?.type, DayEntryType.daily);
+    expect(controller.state.selectedDateKey, localDateKey(now));
+  });
+
+  test('at evening opens mood first, then the missing journal', () async {
+    final database = FakeDatabaseService();
+    final controller = JournalController(database);
+    final now = DateTime(2026, 9, 1, 18);
+
+    await controller.initialize(now: now);
+    expect(controller.state.phase, AppPhase.mood);
+
     controller.updateMood(.4, .8, now: now);
-    await controller.beginSession(now: now);
-    controller.updateContent('Today I noticed I was rushing.');
+    await controller.finishMood(now: now);
 
-    expect(controller.state.phase, SessionPhase.writing);
-    await controller.requestClose();
-    expect(controller.state.phase, SessionPhase.reflection);
-    expect(
-      controller.state.entry?.reflectionQuestion,
-      'What asks you to slow down?',
-    );
-
-    controller.updateReflectionReply('I can leave more space.');
-    await controller.finishSession(now: now.add(const Duration(minutes: 12)));
-
-    expect(controller.state.phase, SessionPhase.archive);
-    expect(controller.state.entry?.status, EntryStatus.closed);
-    expect(controller.state.entry?.reflectionReply, 'I can leave more space.');
-    await database.close();
+    expect(controller.state.phase, AppPhase.journal);
+    expect(database.checkIns[localDateKey(now)], isNotNull);
   });
 
-  test('invalid transitions do not create or lose an entry', () async {
-    final database = DatabaseService(
-      factory: databaseFactoryFfi,
-      databasePath: inMemoryDatabasePath,
-    );
-    final controller = JournalController(database, _FixedReflectionService());
-    await controller.initialize();
+  test('5:59 PM stays journal-first and 6:00 PM becomes mood-first', () async {
+    final before = JournalController(FakeDatabaseService());
+    final evening = JournalController(FakeDatabaseService());
 
-    await controller.requestClose();
-    await controller.finishSession();
+    await before.initialize(now: DateTime(2026, 9, 1, 17, 59));
+    await evening.initialize(now: DateTime(2026, 9, 1, 18));
 
-    expect(controller.state.phase, SessionPhase.arrival);
-    expect(controller.state.entry, isNull);
-    await database.close();
-  });
-
-  test('restores unfinished draft on arrival', () async {
-    final database = DatabaseService(
-      factory: databaseFactoryFfi,
-      databasePath: inMemoryDatabasePath,
-    );
-    await database.saveEntry(
-      JournalEntry.empty().copyWith(content: 'Still writing this.'),
-    );
-    final controller = JournalController(database, _FixedReflectionService());
-
-    await controller.initialize();
-
-    expect(controller.state.phase, SessionPhase.arrival);
-    expect(controller.state.hasUnfinishedDraft, isTrue);
-    expect(controller.state.entry?.content, 'Still writing this.');
-    await database.close();
+    expect(before.state.phase, AppPhase.journal);
+    expect(evening.state.phase, AppPhase.mood);
   });
 
   test(
-    'reflection service failure falls back without blocking close',
+    'before evening, an existing mood still routes to the journal',
     () async {
-      final database = DatabaseService(
-        factory: databaseFactoryFfi,
-        databasePath: inMemoryDatabasePath,
+      final database = FakeDatabaseService();
+      const dateKey = '2026-09-01';
+      await database.saveCheckIn(
+        DailyCheckIn.forDate(
+          dateKey: dateKey,
+          moodAngle: .1,
+          moodIntensity: .5,
+        ),
       );
-      final controller = JournalController(
-        database,
-        _FailingReflectionService(),
-      );
-      await controller.initialize();
-      await controller.beginSession();
-      controller.updateContent('A difficult afternoon.');
+      final controller = JournalController(database);
 
-      await controller.requestClose();
+      await controller.initialize(now: DateTime(2026, 9, 1, 10));
 
-      expect(controller.state.phase, SessionPhase.reflection);
-      expect(controller.state.isReflecting, isFalse);
-      expect(controller.state.lastReflectionWasDemo, isTrue);
-      expect(controller.state.entry?.reflectionQuestion, isNotEmpty);
-      await database.close();
+      expect(controller.state.phase, AppPhase.journal);
     },
   );
 
-  test('reopening writing invalidates the prior reflection', () async {
-    final database = DatabaseService(
-      factory: databaseFactoryFfi,
-      databasePath: inMemoryDatabasePath,
-    );
-    final controller = JournalController(database, _FixedReflectionService());
-    await controller.initialize();
-    await controller.beginSession();
-    controller.updateContent('A thought.');
-    await controller.requestClose();
-
-    await controller.reopenWriting();
-
-    expect(controller.state.phase, SessionPhase.writing);
-    expect(controller.state.entry?.reflectionQuestion, isNull);
-    expect(controller.state.entry?.content, 'A thought.');
-    await database.close();
-  });
-
-  test('closing cannot override navigation to the archive', () async {
-    final database = _ControllableDatabaseService();
-    final controller = JournalController(database, _FixedReflectionService());
-    await controller.initialize();
-    await controller.beginSession();
-    controller.updateContent('A thought worth keeping.');
-    database.pauseNextSave();
-
-    final closing = controller.requestClose();
-    await database.saveStarted;
-    await controller.openArchive();
-    database.releaseSave();
-    await closing;
-
-    expect(controller.state.phase, SessionPhase.archive);
-    expect(controller.state.entry?.content, 'A thought worth keeping.');
-  });
-
-  test('opening the archive persists an edited arrival mood', () async {
-    final database = FakeDatabaseService();
-    final controller = JournalController(database, _FixedReflectionService());
-    final now = DateTime(2026, 8, 31, 18);
-    await controller.initialize(now: now);
-    controller.updateMood(.84, .63, now: now);
-
-    await controller.openArchive();
-
-    final saved = database.checkIns[localDateKey(now)];
-    expect(saved?.moodAngle, .84);
-    expect(saved?.moodIntensity, .63);
-  });
-}
-
-class _FixedReflectionService implements ReflectionService {
-  @override
-  Future<ReflectionResult> reflectOn(String text) async =>
-      const ReflectionResult(
-        question: 'What asks you to slow down?',
-        isDemo: false,
+  test(
+    'completed journal before evening opens binder with mood reminder',
+    () async {
+      final database = FakeDatabaseService();
+      final now = DateTime(2026, 9, 1, 12);
+      final dateKey = localDateKey(now);
+      await database.saveDayEntry(
+        DayEntry.empty(
+          dateKey: dateKey,
+          type: DayEntryType.daily,
+        ).copyWith(content: 'Already wrote today.'),
       );
-}
+      final controller = JournalController(database);
 
-class _FailingReflectionService implements ReflectionService {
-  @override
-  Future<ReflectionResult> reflectOn(String text) =>
-      Future.error(StateError('model unavailable'));
-}
+      await controller.initialize(now: now);
 
-class _ControllableDatabaseService extends FakeDatabaseService {
-  bool _pauseNext = false;
-  late Completer<void> _saveStarted;
-  late Completer<void> _saveRelease;
+      expect(controller.state.phase, AppPhase.binder);
+      expect(controller.state.showMoodReminder, isTrue);
+    },
+  );
 
-  Future<void> get saveStarted => _saveStarted.future;
+  test('completed journal and mood open binder', () async {
+    final database = FakeDatabaseService();
+    final now = DateTime(2026, 9, 1, 20);
+    final dateKey = localDateKey(now);
+    await database.saveDayEntry(
+      DayEntry.empty(
+        dateKey: dateKey,
+        type: DayEntryType.daily,
+      ).copyWith(content: 'A complete page.'),
+    );
+    await database.saveCheckIn(
+      DailyCheckIn.forDate(dateKey: dateKey, moodAngle: .2, moodIntensity: .6),
+    );
+    final controller = JournalController(database);
 
-  void pauseNextSave() {
-    _pauseNext = true;
-    _saveStarted = Completer<void>();
-    _saveRelease = Completer<void>();
-  }
+    await controller.initialize(now: now);
 
-  void releaseSave() => _saveRelease.complete();
+    expect(controller.state.phase, AppPhase.binder);
+    expect(controller.state.showMoodReminder, isFalse);
+  });
 
-  @override
-  Future<void> saveEntry(JournalEntry entry) async {
-    if (_pauseNext) {
-      _pauseNext = false;
-      _saveStarted.complete();
-      await _saveRelease.future;
-    }
-    await super.saveEntry(entry);
-  }
+  test(
+    'keeps additional entries separate and discards an empty new entry',
+    () async {
+      final database = FakeDatabaseService();
+      final controller = JournalController(database);
+      await controller.initialize(now: DateTime(2026, 9, 1, 10));
+      controller.updateEntry(content: 'Main daily journal.');
+      await controller.saveCurrentEntry();
+
+      await controller.addEntry(now: DateTime(2026, 9, 1, 12));
+      controller.updateEntry(title: 'Lunch', content: 'A separate thought.');
+      await controller.saveCurrentEntry();
+      final savedAdditionalId = controller.state.selectedEntryId;
+
+      await controller.addEntry(now: DateTime(2026, 9, 1, 14));
+      await controller.selectEntry(controller.state.dailyEntry!.id);
+
+      expect(controller.state.entries, hasLength(2));
+      expect(
+        database.entries[savedAdditionalId]?.content,
+        'A separate thought.',
+      );
+    },
+  );
+
+  test('historical edits return to binder without launch routing', () async {
+    final database = FakeDatabaseService();
+    final controller = JournalController(database);
+    await controller.initialize(now: DateTime(2026, 9, 1, 10));
+
+    await controller.openDay('2026-08-20');
+    controller.updateEntry(content: 'Corrected history.');
+    await controller.finishEditing(now: DateTime(2026, 9, 1, 20));
+
+    expect(controller.state.phase, AppPhase.binder);
+    expect(
+      database.entries.values
+          .singleWhere((entry) => entry.dateKey == '2026-08-20')
+          .content,
+      'Corrected history.',
+    );
+  });
+
+  test('a failed autosave does not switch entries or lose text', () async {
+    final database = FakeDatabaseService();
+    final controller = JournalController(database);
+    await controller.initialize(now: DateTime(2026, 9, 1, 10));
+    controller.updateEntry(content: 'Daily text.');
+    await controller.saveCurrentEntry();
+    await controller.addEntry(now: DateTime(2026, 9, 1, 12));
+    controller.updateEntry(content: 'Unsaved but still present.');
+    final additionalId = controller.state.selectedEntryId;
+    database.failEntrySaves = true;
+
+    await controller.selectEntry(controller.state.dailyEntry!.id);
+
+    expect(controller.state.selectedEntryId, additionalId);
+    expect(
+      controller.state.selectedEntry?.content,
+      'Unsaved but still present.',
+    );
+    expect(controller.state.error, isA<StateError>());
+  });
 }
