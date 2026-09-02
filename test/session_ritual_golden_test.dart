@@ -35,7 +35,7 @@ void main() {
     );
   });
 
-  testWidgets('entry stack narrow desktop golden', (tester) async {
+  testWidgets('entry wheel narrow desktop golden', (tester) async {
     final harness = await _pumpGolden(
       tester,
       size: const Size(820, 700),
@@ -51,12 +51,15 @@ void main() {
       content: 'The slower route made room for a better conversation.',
     );
     await controller.saveCurrentEntry();
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('entry-stack-toggle')));
+    await controller.addEntry();
+    controller.updateEntry(
+      title: 'Late afternoon',
+      content: 'A quiet idea worth returning to tomorrow.',
+    );
     await tester.pumpAndSettle();
     await expectLater(
       find.byType(EditorScreen),
-      matchesGoldenFile('goldens/entry_stack_expanded_narrow_desktop.png'),
+      matchesGoldenFile('goldens/entry_wheel_narrow_desktop.png'),
     );
   });
 

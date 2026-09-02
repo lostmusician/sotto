@@ -7,6 +7,7 @@ class FakeDatabaseService extends DatabaseService {
   final Map<String, DailyCheckIn> checkIns = {};
   EveningPreference preference = const EveningPreference();
   bool failEntrySaves = false;
+  int saveDayEntryCallCount = 0;
 
   @override
   Future<JournalDay> ensureDay(String dateKey, {DateTime? now}) async =>
@@ -33,6 +34,7 @@ class FakeDatabaseService extends DatabaseService {
 
   @override
   Future<void> saveDayEntry(DayEntry entry) async {
+    saveDayEntryCallCount += 1;
     if (failEntrySaves) throw StateError('entry save failed');
     await ensureDay(entry.dateKey, now: entry.createdAt);
     if (entry.type == DayEntryType.daily &&

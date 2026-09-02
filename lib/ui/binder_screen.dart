@@ -268,6 +268,7 @@ class _BinderScreenState extends ConsumerState<BinderScreen>
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   child: SegmentedButton<BinderZoom>(
                     key: const Key('binder-zoom'),
+                    showSelectedIcon: false,
                     segments: const [
                       ButtonSegment(
                         value: BinderZoom.days,
@@ -299,91 +300,133 @@ class _BinderScreenState extends ConsumerState<BinderScreen>
                           builder: (context, constraints) {
                             final compact = constraints.maxWidth < 600;
                             final pitch = compact ? 14.0 : 24.0;
-                            return Listener(
-                              key: const Key('binder-rail'),
-                              onPointerSignal: (event) {
-                                if (event is! PointerScrollEvent) return;
-                                final delta =
-                                    event.scrollDelta.dx.abs() >
-                                        event.scrollDelta.dy.abs()
-                                    ? event.scrollDelta.dx
-                                    : event.scrollDelta.dy;
-                                _moveBy(delta / pitch, items);
-                                _scheduleSnap(items);
-                              },
-                              onPointerPanZoomStart: (_) {
-                                _motionController.stop();
-                                _scaleHandled = false;
-                              },
-                              onPointerPanZoomUpdate: (event) {
-                                if (!_scaleHandled && event.scale > 1.12) {
-                                  _scaleHandled = true;
-                                  _zoomBy(-1);
-                                  return;
+                            final transitionDuration =
+                                MediaQuery.disableAnimationsOf(context)
+                                ? Duration.zero
+                                : const Duration(milliseconds: 260);
+                            return AnimatedSwitcher(
+                              key: const Key('binder-zoom-transition'),
+                              duration: transitionDuration,
+                              reverseDuration: transitionDuration,
+                              layoutBuilder: (currentChild, previousChildren) {
+                                final children = <Widget>[...previousChildren];
+                                if (currentChild != null) {
+                                  children.add(currentChild);
                                 }
-                                if (!_scaleHandled && event.scale < .88) {
-                                  _scaleHandled = true;
-                                  _zoomBy(1);
-                                  return;
-                                }
-                                if (!_scaleHandled) {
-                                  final delta =
-                                      event.panDelta.dx.abs() >
-                                          event.panDelta.dy.abs()
-                                      ? -event.panDelta.dx
-                                      : event.panDelta.dy;
-                                  _moveBy(delta / pitch, items);
-                                }
+                                return Stack(
+                                  fit: StackFit.expand,
+                                  children: children,
+                                );
                               },
-                              onPointerPanZoomEnd: (_) =>
-                                  _animateToIndex(_railPosition.round(), items),
-                              child: GestureDetector(
-                                behavior: HitTestBehavior.opaque,
-                                onScaleStart: (_) {
-                                  _motionController.stop();
-                                  _scaleHandled = false;
-                                },
-                                onScaleUpdate: (details) {
-                                  if (details.pointerCount > 1) {
-                                    if (!_scaleHandled &&
-                                        details.scale > 1.12) {
+                              transitionBuilder: (child, animation) =>
+                                  FadeTransition(
+                                    opacity: CurvedAnimation(
+                                      parent: animation,
+                                      curve: Curves.easeOutCubic,
+                                    ),
+                                    child: ScaleTransition(
+                                      alignment: Alignment.center,
+                                      scale: Tween<double>(begin: .94, end: 1)
+                                          .animate(
+                                            CurvedAnimation(
+                                              parent: animation,
+                                              curve: Curves.easeOutCubic,
+                                            ),
+                                          ),
+                                      child: child,
+                                    ),
+                                  ),
+                              child: KeyedSubtree(
+                                key: ValueKey(binder.zoom),
+                                child: Listener(
+                                  key: const Key('binder-rail'),
+                                  onPointerSignal: (event) {
+                                    if (event is! PointerScrollEvent) return;
+                                    final delta =
+                                        event.scrollDelta.dx.abs() >
+                                            event.scrollDelta.dy.abs()
+                                        ? event.scrollDelta.dx
+                                        : event.scrollDelta.dy;
+                                    _moveBy(delta / pitch, items);
+                                    _scheduleSnap(items);
+                                  },
+                                  onPointerPanZoomStart: (_) {
+                                    _motionController.stop();
+                                    _scaleHandled = false;
+                                  },
+                                  onPointerPanZoomUpdate: (event) {
+                                    if (!_scaleHandled && event.scale > 1.12) {
                                       _scaleHandled = true;
                                       _zoomBy(-1);
-                                    } else if (!_scaleHandled &&
-                                        details.scale < .88) {
+                                      return;
+                                    }
+                                    if (!_scaleHandled && event.scale < .88) {
                                       _scaleHandled = true;
                                       _zoomBy(1);
+                                      return;
                                     }
-                                    return;
-                                  }
-                                  if (!_scaleHandled) {
-                                    _moveBy(
-                                      -details.focalPointDelta.dx / pitch,
-                                      items,
-                                    );
-                                  }
-                                },
-                                onScaleEnd: (details) {
-                                  if (!_scaleHandled) {
-                                    _snapWithVelocity(
-                                      details.velocity.pixelsPerSecond.dx,
-                                      items,
-                                    );
-                                  }
-                                },
-                                child: _BinderRail(
-                                  key: const Key('binder-pages'),
-                                  items: items,
-                                  zoom: binder.zoom,
-                                  position: _railPosition,
-                                  selectedIndex: _selectedIndex.clamp(
-                                    0,
-                                    items.length - 1,
+                                    if (!_scaleHandled) {
+                                      final delta =
+                                          event.panDelta.dx.abs() >
+                                              event.panDelta.dy.abs()
+                                          ? -event.panDelta.dx
+                                          : event.panDelta.dy;
+                                      _moveBy(delta / pitch, items);
+                                    }
+                                  },
+                                  onPointerPanZoomEnd: (_) => _animateToIndex(
+                                    _railPosition.round(),
+                                    items,
                                   ),
-                                  pitch: pitch,
-                                  compact: compact,
-                                  onSelect: (index) =>
-                                      _animateToIndex(index, items),
+                                  child: GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onScaleStart: (_) {
+                                      _motionController.stop();
+                                      _scaleHandled = false;
+                                    },
+                                    onScaleUpdate: (details) {
+                                      if (details.pointerCount > 1) {
+                                        if (!_scaleHandled &&
+                                            details.scale > 1.12) {
+                                          _scaleHandled = true;
+                                          _zoomBy(-1);
+                                        } else if (!_scaleHandled &&
+                                            details.scale < .88) {
+                                          _scaleHandled = true;
+                                          _zoomBy(1);
+                                        }
+                                        return;
+                                      }
+                                      if (!_scaleHandled) {
+                                        _moveBy(
+                                          -details.focalPointDelta.dx / pitch,
+                                          items,
+                                        );
+                                      }
+                                    },
+                                    onScaleEnd: (details) {
+                                      if (!_scaleHandled) {
+                                        _snapWithVelocity(
+                                          details.velocity.pixelsPerSecond.dx,
+                                          items,
+                                        );
+                                      }
+                                    },
+                                    child: _BinderRail(
+                                      key: const Key('binder-pages'),
+                                      items: items,
+                                      zoom: binder.zoom,
+                                      position: _railPosition,
+                                      selectedIndex: _selectedIndex.clamp(
+                                        0,
+                                        items.length - 1,
+                                      ),
+                                      pitch: pitch,
+                                      compact: compact,
+                                      onSelect: (index) =>
+                                          _animateToIndex(index, items),
+                                    ),
+                                  ),
                                 ),
                               ),
                             );

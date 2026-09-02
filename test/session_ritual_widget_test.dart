@@ -10,27 +10,19 @@ import 'package:sotto/ui/editor_screen.dart';
 import 'support/session_test_doubles.dart';
 
 void main() {
-  testWidgets('journal defaults to the daily entry with gratitude footer', (
+  testWidgets('journal defaults to daily with an always-visible entry wheel', (
     tester,
   ) async {
     final harness = await _pumpHarness(tester, now: DateTime(2026, 9, 1, 10));
 
     expect(find.byKey(const Key('full-page-journal')), findsOneWidget);
-    expect(find.byKey(const Key('entry-stack')), findsOneWidget);
-    expect(find.text('Daily Journal'), findsOneWidget);
+    expect(find.byKey(const Key('entry-wheel-panel')), findsOneWidget);
+    expect(find.byKey(const Key('entry-wheel')), findsOneWidget);
+    expect(find.byKey(const Key('entry-wheel-center')), findsOneWidget);
+    expect(find.text('DAILY'), findsOneWidget);
     expect(find.byKey(const Key('journal-editor')), findsOneWidget);
     expect(find.byKey(const Key('gratitude-editor')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('entry-stack-toggle')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('entry-stack-expanded')), findsOneWidget);
-    expect(find.text('DAILY'), findsOneWidget);
-    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('entry-stack-expanded')), findsNothing);
-    await tester.tap(find.byKey(const Key('entry-stack-toggle')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('journal-editor')));
-    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('entry-stack-toggle')), findsNothing);
     expect(find.byKey(const Key('entry-stack-expanded')), findsNothing);
     expect(find.byKey(const Key('new-entry')), findsOneWidget);
     expect(find.byKey(const Key('finish-journal')), findsOneWidget);
@@ -38,6 +30,67 @@ void main() {
       harness.container.read(journalControllerProvider).phase,
       AppPhase.journal,
     );
+  });
+
+  testWidgets('one tap focuses the gratitude field', (tester) async {
+    await _pumpHarness(tester, now: DateTime(2026, 9, 1, 10));
+    final gratitudeField = find.byKey(const Key('gratitude-editor'));
+    final gratitudeEditable = find.descendant(
+      of: gratitudeField,
+      matching: find.byType(EditableText),
+    );
+
+    await tester.tap(gratitudeField);
+    await tester.pump();
+
+    expect(
+      tester.widget<EditableText>(gratitudeEditable).focusNode.hasFocus,
+      isTrue,
+    );
+  });
+
+  testWidgets('entry wheel keeps the selected entry between faded neighbors', (
+    tester,
+  ) async {
+    final harness = await _pumpHarness(tester, now: DateTime(2026, 9, 1, 10));
+    final controller = harness.container.read(
+      journalControllerProvider.notifier,
+    );
+    await controller.addEntry(now: DateTime(2026, 9, 1, 12));
+    controller.updateEntry(content: 'First additional entry.');
+    await controller.saveCurrentEntry();
+    await controller.addEntry(now: DateTime(2026, 9, 1, 14));
+    controller.updateEntry(content: 'Second additional entry.');
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('entry-wheel-previous')), findsOneWidget);
+    expect(find.byKey(const Key('entry-wheel-center')), findsOneWidget);
+    expect(find.byKey(const Key('entry-wheel-next')), findsOneWidget);
+    expect(
+      tester
+          .widget<AnimatedOpacity>(find.byKey(const Key('entry-wheel-center')))
+          .opacity,
+      1,
+    );
+    expect(
+      tester
+          .widget<AnimatedOpacity>(
+            find.byKey(const Key('entry-wheel-previous')),
+          )
+          .opacity,
+      lessThan(1),
+    );
+    expect(
+      tester
+          .widget<AnimatedOpacity>(find.byKey(const Key('entry-wheel-next')))
+          .opacity,
+      lessThan(1),
+    );
+
+    await tester.tap(find.byKey(const Key('entry-wheel-previous')));
+    await tester.pumpAndSettle();
+    expect(controller.state.selectedEntry?.type, DayEntryType.daily);
+    expect(find.byKey(const Key('gratitude-editor')), findsOneWidget);
   });
 
   testWidgets('new entry is separate and does not show gratitude', (
@@ -60,7 +113,28 @@ void main() {
     expect(state.selectedEntry?.type, DayEntryType.additional);
   });
 
-  testWidgets('keyboard, wheel, and touch move through the entry stack', (
+  testWidgets('leaving an empty additional entry removes it', (tester) async {
+    final harness = await _pumpHarness(tester, now: DateTime(2026, 9, 1, 10));
+    await tester.tap(find.byKey(const Key('new-entry')));
+    await tester.pumpAndSettle();
+    expect(
+      harness.container.read(journalControllerProvider).entries,
+      hasLength(2),
+    );
+
+    await tester.fling(
+      find.byKey(const Key('entry-wheel')),
+      const Offset(0, 100),
+      900,
+    );
+    await tester.pumpAndSettle();
+
+    final state = harness.container.read(journalControllerProvider);
+    expect(state.entries, hasLength(1));
+    expect(state.selectedEntry?.type, DayEntryType.daily);
+  });
+
+  testWidgets('keyboard, wheel, and touch snap through the entry wheel', (
     tester,
   ) async {
     final harness = await _pumpHarness(tester, now: DateTime(2026, 9, 1, 10));
@@ -85,20 +159,20 @@ void main() {
       DayEntryType.daily,
     );
 
-    final stackListener = tester.widget<Listener>(
-      find.byKey(const Key('entry-stack-wheel')),
-    );
-    stackListener.onPointerSignal!(
-      const PointerScrollEvent(scrollDelta: Offset(0, 24)),
-    );
+    harness.database.saveDayEntryCallCount = 0;
+    final wheelCenter = tester.getCenter(find.byKey(const Key('entry-wheel')));
+    final mouse = TestPointer(7, PointerDeviceKind.mouse);
+    tester.binding.handlePointerEvent(mouse.hover(wheelCenter));
+    tester.binding.handlePointerEvent(mouse.scroll(const Offset(0, 58)));
     await tester.pumpAndSettle();
     expect(
       harness.container.read(journalControllerProvider).selectedEntry?.type,
       DayEntryType.additional,
     );
+    expect(harness.database.saveDayEntryCallCount, 1);
 
     await tester.fling(
-      find.byKey(const Key('entry-stack')),
+      find.byKey(const Key('entry-wheel')),
       const Offset(0, 100),
       900,
     );
@@ -107,6 +181,45 @@ void main() {
       harness.container.read(journalControllerProvider).selectedEntry?.type,
       DayEntryType.daily,
     );
+  });
+
+  testWidgets('small wheel deltas accumulate and large deltas cross entries', (
+    tester,
+  ) async {
+    final harness = await _pumpHarness(tester, now: DateTime(2026, 9, 1, 10));
+    final controller = harness.container.read(
+      journalControllerProvider.notifier,
+    );
+    for (var index = 0; index < 4; index++) {
+      await controller.addEntry(now: DateTime(2026, 9, 1, 11 + index));
+      controller.updateEntry(content: 'Additional entry $index');
+      await controller.saveCurrentEntry();
+    }
+    final dailyId = controller.state.dailyEntry!.id;
+    await controller.selectEntry(dailyId);
+    await tester.pumpAndSettle();
+
+    final wheelCenter = tester.getCenter(find.byKey(const Key('entry-wheel')));
+    final mouse = TestPointer(8, PointerDeviceKind.mouse);
+    tester.binding.handlePointerEvent(mouse.hover(wheelCenter));
+    harness.database.saveDayEntryCallCount = 0;
+    for (var index = 0; index < 3; index++) {
+      tester.binding.handlePointerEvent(mouse.scroll(const Offset(0, 8)));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await tester.pumpAndSettle();
+
+    expect(controller.state.selectedEntryId, isNot(dailyId));
+    expect(harness.database.saveDayEntryCallCount, 1);
+
+    await controller.selectEntry(dailyId);
+    await tester.pumpAndSettle();
+    harness.database.saveDayEntryCallCount = 0;
+    tester.binding.handlePointerEvent(mouse.scroll(const Offset(0, 170)));
+    await tester.pumpAndSettle();
+
+    expect(controller.state.selectedEntryId, controller.state.entries.last.id);
+    expect(harness.database.saveDayEntryCallCount, 1);
   });
 
   testWidgets('completed journal before evening shows binder mood reminder', (
@@ -127,6 +240,21 @@ void main() {
 
     expect(find.byKey(const Key('mood-reminder')), findsOneWidget);
     expect(find.byKey(const Key('binder-rail')), findsOneWidget);
+    expect(find.byKey(const Key('binder-pages')), findsOneWidget);
+    expect(
+      tester
+          .widget<SegmentedButton<BinderZoom>>(
+            find.byKey(const Key('binder-zoom')),
+          )
+          .showSelectedIcon,
+      isFalse,
+    );
+
+    await tester.tap(find.text('Weeks'));
+    await tester.pump();
+    expect(find.byKey(const Key('binder-zoom-transition')), findsOneWidget);
+    expect(find.byKey(const Key('binder-pages')), findsNWidgets(2));
+    await tester.pumpAndSettle();
     expect(find.byKey(const Key('binder-pages')), findsOneWidget);
   });
 

@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -315,48 +314,31 @@ class _JournalView extends StatefulWidget {
 }
 
 class _JournalViewState extends State<_JournalView> {
-  bool _stackExpanded = false;
-
   void _moveSelection(int delta) {
     final index = widget.state.entries.indexWhere(
       (entry) => entry.id == widget.state.selectedEntryId,
     );
     final next = (index + delta).clamp(0, widget.state.entries.length - 1);
     if (next != index) {
-      setState(() => _stackExpanded = false);
       unawaited(widget.onSelectEntry(widget.state.entries[next].id));
     }
   }
 
-  Future<void> _selectEntry(String id) async {
-    setState(() => _stackExpanded = false);
-    await widget.onSelectEntry(id);
-  }
-
-  Future<void> _addEntry() async {
-    setState(() => _stackExpanded = false);
-    await widget.onAddEntry();
-  }
-
-  void _resumeWriting() {
-    if (_stackExpanded) setState(() => _stackExpanded = false);
-    widget.writingFocus.requestFocus();
-  }
+  void _resumeWriting() => widget.writingFocus.requestFocus();
 
   @override
   Widget build(BuildContext context) {
     final selected = widget.state.selectedEntry;
     if (selected == null) return const _LoadingView();
-    final compact = MediaQuery.sizeOf(context).width < 600;
+    final viewportWidth = MediaQuery.sizeOf(context).width;
+    final compact = viewportWidth < 600;
+    final wheelOverlapsWritingColumn = viewportWidth < 1380;
     final pagePadding = compact ? 20.0 : 48.0;
     final shortcuts = <ShortcutActivator, VoidCallback>{
       const SingleActivator(LogicalKeyboardKey.arrowUp, alt: true): () =>
           _moveSelection(-1),
       const SingleActivator(LogicalKeyboardKey.arrowDown, alt: true): () =>
           _moveSelection(1),
-      const SingleActivator(LogicalKeyboardKey.escape): () {
-        if (_stackExpanded) setState(() => _stackExpanded = false);
-      },
     };
     final duration = MediaQuery.disableAnimationsOf(context)
         ? Duration.zero
@@ -390,7 +372,7 @@ class _JournalViewState extends State<_JournalView> {
                         key: ValueKey(selected.id),
                         padding: EdgeInsets.fromLTRB(
                           pagePadding,
-                          82,
+                          wheelOverlapsWritingColumn ? 176 : 82,
                           pagePadding,
                           48,
                         ),
@@ -413,14 +395,7 @@ class _JournalViewState extends State<_JournalView> {
                                       key: const Key('entry-title'),
                                       controller: widget.titleController,
                                       onTap: _resumeWriting,
-                                      onChanged: (_) {
-                                        if (_stackExpanded) {
-                                          setState(
-                                            () => _stackExpanded = false,
-                                          );
-                                        }
-                                        widget.onEntryChanged();
-                                      },
+                                      onChanged: (_) => widget.onEntryChanged(),
                                       decoration: InputDecoration(
                                         border: InputBorder.none,
                                         hintText:
@@ -441,15 +416,11 @@ class _JournalViewState extends State<_JournalView> {
                                       focusNode: widget.writingFocus,
                                       autofocus: true,
                                       onTap: _resumeWriting,
-                                      onChanged: (_) {
-                                        if (_stackExpanded) {
-                                          setState(
-                                            () => _stackExpanded = false,
-                                          );
-                                        }
-                                        widget.onEntryChanged();
-                                      },
-                                      minLines: compact ? 15 : 17,
+                                      onChanged: (_) => widget.onEntryChanged(),
+                                      // Keep the gratitude footer in the initial
+                                      // viewport, then let this field expand with
+                                      // the journal as the user writes.
+                                      minLines: compact ? 6 : 5,
                                       maxLines: null,
                                       keyboardType: TextInputType.multiline,
                                       decoration: const InputDecoration(
@@ -480,7 +451,6 @@ class _JournalViewState extends State<_JournalView> {
                                       TextField(
                                         key: const Key('gratitude-editor'),
                                         controller: widget.gratitudeController,
-                                        onTap: _resumeWriting,
                                         onChanged: widget.onGratitudeChanged,
                                         minLines: 2,
                                         maxLines: 5,
@@ -528,17 +498,13 @@ class _JournalViewState extends State<_JournalView> {
                 Positioned(
                   right: compact ? 8 : 16,
                   top: 8,
-                  child: _EntryStack(
+                  child: _EntryWheel(
                     entries: widget.state.entries,
                     selectedEntryId: selected.id,
                     writingFocus: widget.writingFocus,
-                    expanded: _stackExpanded,
-                    onToggle: () =>
-                        setState(() => _stackExpanded = !_stackExpanded),
-                    onSelected: _selectEntry,
-                    onAdd: _addEntry,
+                    onSelected: widget.onSelectEntry,
+                    onAdd: widget.onAddEntry,
                     onFinish: widget.onFinish,
-                    onMove: _moveSelection,
                   ),
                 ),
               ],
@@ -550,43 +516,120 @@ class _JournalViewState extends State<_JournalView> {
   }
 }
 
-class _EntryStack extends StatefulWidget {
-  const _EntryStack({
+class _EntryWheel extends StatefulWidget {
+  const _EntryWheel({
     required this.entries,
     required this.selectedEntryId,
     required this.writingFocus,
-    required this.expanded,
-    required this.onToggle,
     required this.onSelected,
     required this.onAdd,
     required this.onFinish,
-    required this.onMove,
   });
 
   final List<DayEntry> entries;
   final String selectedEntryId;
   final FocusNode writingFocus;
-  final bool expanded;
-  final VoidCallback onToggle;
   final Future<void> Function(String) onSelected;
   final Future<void> Function() onAdd;
   final Future<void> Function() onFinish;
-  final void Function(int) onMove;
 
   @override
-  State<_EntryStack> createState() => _EntryStackState();
+  State<_EntryWheel> createState() => _EntryWheelState();
 }
 
-class _EntryStackState extends State<_EntryStack> {
+class _EntryWheelState extends State<_EntryWheel> {
+  static const _itemExtent = 42.0;
+
+  late FixedExtentScrollController _scrollController;
   bool _hovering = false;
-  double _verticalDrag = 0;
+  late int _visualIndex;
+  bool _selectionInFlight = false;
+  int? _queuedSelection;
+
+  int get _selectedIndex {
+    final index = widget.entries.indexWhere(
+      (entry) => entry.id == widget.selectedEntryId,
+    );
+    return index < 0 ? 0 : index;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _visualIndex = _selectedIndex;
+    _scrollController = FixedExtentScrollController(initialItem: _visualIndex);
+  }
+
+  @override
+  void didUpdateWidget(covariant _EntryWheel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final selectedIndex = _selectedIndex.clamp(0, widget.entries.length - 1);
+    if (selectedIndex == _visualIndex &&
+        oldWidget.entries.length == widget.entries.length) {
+      return;
+    }
+    _visualIndex = selectedIndex;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      if (_scrollController.selectedItem != selectedIndex) {
+        _scrollController.jumpToItem(selectedIndex);
+      }
+      setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _commitVisualSelection() async {
+    final index = _visualIndex.clamp(0, widget.entries.length - 1);
+    if (widget.entries[index].id == widget.selectedEntryId) return;
+    if (_selectionInFlight) {
+      _queuedSelection = index;
+      return;
+    }
+    _selectionInFlight = true;
+    await widget.onSelected(widget.entries[index].id);
+    if (!mounted) return;
+    _selectionInFlight = false;
+    final queued = _queuedSelection;
+    _queuedSelection = null;
+    if (queued != null && queued != index) {
+      _visualIndex = queued.clamp(0, widget.entries.length - 1);
+      await _commitVisualSelection();
+    }
+  }
+
+  Future<void> _moveTo(int index) async {
+    final target = index.clamp(0, widget.entries.length - 1);
+    if (target == _visualIndex) return;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    if (reduceMotion) {
+      _scrollController.jumpToItem(target);
+      setState(() => _visualIndex = target);
+    } else {
+      await _scrollController.animateToItem(
+        target,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+      );
+    }
+    await _commitVisualSelection();
+  }
+
+  Key? _positionKey(int index) {
+    if (index == _visualIndex) return const Key('entry-wheel-center');
+    if (index == _visualIndex - 1) return const Key('entry-wheel-previous');
+    if (index == _visualIndex + 1) return const Key('entry-wheel-next');
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final selectedIndex = widget.entries.indexWhere(
-      (entry) => entry.id == widget.selectedEntryId,
-    );
-    final safeIndex = selectedIndex < 0 ? 0 : selectedIndex;
+    final safeIndex = _selectedIndex;
     final selected = widget.entries[safeIndex];
     final compact = MediaQuery.sizeOf(context).width < 600;
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
@@ -601,8 +644,7 @@ class _EntryStackState extends State<_EntryStack> {
       child: AnimatedBuilder(
         animation: widget.writingFocus,
         builder: (context, child) {
-          final faded =
-              widget.writingFocus.hasFocus && !_hovering && !widget.expanded;
+          final faded = widget.writingFocus.hasFocus && !_hovering;
           return AnimatedOpacity(
             duration: duration,
             opacity: highContrast
@@ -615,201 +657,229 @@ class _EntryStackState extends State<_EntryStack> {
             child: child,
           );
         },
-        child: Listener(
-          key: const Key('entry-stack-wheel'),
-          onPointerSignal: (event) {
-            if (event is PointerScrollEvent && event.scrollDelta.dy != 0) {
-              widget.onMove(event.scrollDelta.dy > 0 ? 1 : -1);
-            }
-          },
-          child: GestureDetector(
-            key: const Key('entry-stack'),
-            behavior: HitTestBehavior.opaque,
-            onVerticalDragStart: (_) => _verticalDrag = 0,
-            onVerticalDragUpdate: (details) {
-              _verticalDrag += details.primaryDelta ?? 0;
-            },
-            onVerticalDragEnd: (_) {
-              if (_verticalDrag.abs() > 20) {
-                widget.onMove(_verticalDrag < 0 ? 1 : -1);
-              }
-            },
-            child: _GlassSurface(
-              child: SizedBox(
-                width: compact ? 220 : 284,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
+        child: SizedBox(
+          key: const Key('entry-wheel-panel'),
+          width: compact ? 220 : 284,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                height: 40,
+                child: Row(
                   children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Semantics(
-                            button: true,
-                            expanded: widget.expanded,
-                            label:
-                                'Current entry, ${safeIndex + 1} of ${widget.entries.length}, ${_entryLabel(selected)}',
-                            onIncrease: () => widget.onMove(1),
-                            onDecrease: () => widget.onMove(-1),
-                            child: InkWell(
-                              key: const Key('entry-stack-toggle'),
-                              onTap: widget.onToggle,
-                              borderRadius: BorderRadius.circular(13),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 10,
-                                ),
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        _entryLabel(selected),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ),
-                                    Icon(
-                                      widget.expanded
-                                          ? Icons.expand_less_rounded
-                                          : Icons.expand_more_rounded,
-                                      size: 18,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
+                    const Expanded(
+                      child: Padding(
+                        padding: EdgeInsets.only(left: 12),
+                        child: Text(
+                          'ENTRIES',
+                          style: TextStyle(fontSize: 9, letterSpacing: 1.1),
                         ),
-                        _CompactAction(
-                          key: const Key('new-entry'),
-                          tooltip: 'New entry',
-                          onPressed: widget.onAdd,
-                          icon: Icons.add_rounded,
-                        ),
-                        _CompactAction(
-                          key: const Key('finish-journal'),
-                          tooltip: 'Done for now',
-                          onPressed: widget.onFinish,
-                          icon: Icons.check_rounded,
-                        ),
-                      ],
+                      ),
                     ),
-                    AnimatedSize(
-                      duration: duration,
-                      curve: Curves.easeOutCubic,
-                      child: widget.expanded
-                          ? ConstrainedBox(
-                              key: const Key('entry-stack-expanded'),
-                              constraints: const BoxConstraints(maxHeight: 150),
-                              child: ListView.builder(
-                                shrinkWrap: true,
-                                padding: const EdgeInsets.fromLTRB(6, 2, 6, 8),
-                                itemExtent: 46,
-                                itemCount: widget.entries.length,
-                                itemBuilder: (context, index) {
-                                  final entry = widget.entries[index];
-                                  final isSelected =
-                                      entry.id == widget.selectedEntryId;
-                                  return Semantics(
-                                    selected: isSelected,
-                                    button: true,
-                                    label: _entryLabel(entry),
-                                    child: InkWell(
-                                      key: Key('entry-slip-${entry.id}'),
-                                      onTap: () => widget.onSelected(entry.id),
-                                      borderRadius: BorderRadius.circular(11),
-                                      child: Container(
-                                        margin: EdgeInsets.only(
-                                          left: index.isEven ? 0 : 7,
-                                          bottom: 4,
-                                        ),
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 11,
-                                          vertical: 8,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: isSelected
-                                              ? const Color(0xCCFFFFFF)
-                                              : const Color(0x66E3DED3),
-                                          borderRadius: BorderRadius.circular(
-                                            11,
-                                          ),
-                                        ),
-                                        child: Row(
-                                          children: [
-                                            Text(
-                                              entry.type == DayEntryType.daily
-                                                  ? 'DAILY'
-                                                  : _entryTime(entry),
-                                              style: const TextStyle(
-                                                fontSize: 9,
-                                                letterSpacing: .7,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 9),
-                                            Expanded(
-                                              child: Text(
-                                                _entryExcerpt(entry),
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: const TextStyle(
-                                                  fontSize: 12,
-                                                ),
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                  );
-                                },
-                              ),
-                            )
-                          : const SizedBox.shrink(),
+                    _CompactAction(
+                      key: const Key('new-entry'),
+                      tooltip: 'New entry',
+                      onPressed: widget.onAdd,
+                      icon: Icons.add_rounded,
+                    ),
+                    _CompactAction(
+                      key: const Key('finish-journal'),
+                      tooltip: 'Done for now',
+                      onPressed: widget.onFinish,
+                      icon: Icons.check_rounded,
                     ),
                   ],
                 ),
               ),
-            ),
+              Semantics(
+                container: true,
+                label:
+                    'Current entry, ${safeIndex + 1} of ${widget.entries.length}',
+                value: _entryLabel(selected),
+                increasedValue: safeIndex < widget.entries.length - 1
+                    ? _entryLabel(widget.entries[safeIndex + 1])
+                    : null,
+                decreasedValue: safeIndex > 0
+                    ? _entryLabel(widget.entries[safeIndex - 1])
+                    : null,
+                onIncrease: safeIndex < widget.entries.length - 1
+                    ? () => _moveTo(safeIndex + 1)
+                    : null,
+                onDecrease: safeIndex > 0 ? () => _moveTo(safeIndex - 1) : null,
+                child: ExcludeSemantics(
+                  child: ShaderMask(
+                    shaderCallback: (bounds) => const LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Color(0x80FFFFFF),
+                        Colors.white,
+                        Colors.white,
+                        Color(0x80FFFFFF),
+                      ],
+                      stops: [0, .32, .68, 1],
+                    ).createShader(bounds),
+                    blendMode: BlendMode.dstIn,
+                    child: SizedBox(
+                      height: _itemExtent * 3,
+                      child: NotificationListener<ScrollNotification>(
+                        onNotification: (notification) {
+                          if (notification is ScrollEndNotification) {
+                            unawaited(_commitVisualSelection());
+                          }
+                          return false;
+                        },
+                        child: ListWheelScrollView.useDelegate(
+                          key: const Key('entry-wheel'),
+                          controller: _scrollController,
+                          itemExtent: _itemExtent,
+                          physics: const FixedExtentScrollPhysics(),
+                          diameterRatio: 2.7,
+                          perspective: .002,
+                          squeeze: .92,
+                          overAndUnderCenterOpacity: 1,
+                          onSelectedItemChanged: (index) {
+                            if (_visualIndex != index) {
+                              setState(() => _visualIndex = index);
+                            }
+                          },
+                          childDelegate: ListWheelChildBuilderDelegate(
+                            childCount: widget.entries.length,
+                            builder: (context, index) {
+                              if (index < 0 || index >= widget.entries.length) {
+                                return null;
+                              }
+                              final entry = widget.entries[index];
+                              final isCentered = index == _visualIndex;
+                              return AnimatedOpacity(
+                                key: _positionKey(index),
+                                duration: duration,
+                                opacity: isCentered ? 1 : .62,
+                                child: AnimatedScale(
+                                  duration: duration,
+                                  scale: isCentered ? 1 : .92,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 7,
+                                      vertical: 3,
+                                    ),
+                                    child: DecoratedBox(
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(10),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black.withValues(
+                                              alpha: isCentered ? .09 : .04,
+                                            ),
+                                            blurRadius: isCentered ? 12 : 7,
+                                            offset: const Offset(0, 4),
+                                          ),
+                                        ],
+                                      ),
+                                      child: ClipRRect(
+                                        borderRadius: BorderRadius.circular(10),
+                                        child: BackdropFilter(
+                                          filter: ui.ImageFilter.blur(
+                                            sigmaX: 9,
+                                            sigmaY: 9,
+                                          ),
+                                          child: DecoratedBox(
+                                            decoration: BoxDecoration(
+                                              gradient: LinearGradient(
+                                                begin: Alignment.topLeft,
+                                                end: Alignment.bottomRight,
+                                                colors: highContrast
+                                                    ? const [
+                                                        Color(0xFFFFFCF5),
+                                                        Color(0xFFFFFCF5),
+                                                      ]
+                                                    : isCentered
+                                                    ? const [
+                                                        Color(0xB8FFFFFF),
+                                                        Color(0x7AF6F0E6),
+                                                      ]
+                                                    : const [
+                                                        Color(0x8CFFFFFF),
+                                                        Color(0x52F6F0E6),
+                                                      ],
+                                              ),
+                                              border: Border.all(
+                                                color: highContrast
+                                                    ? const Color(0x994F4B56)
+                                                    : const Color(0x8AFFFFFF),
+                                                width: .75,
+                                              ),
+                                            ),
+                                            child: InkWell(
+                                              key: Key(
+                                                'entry-slip-${entry.id}',
+                                              ),
+                                              onTap: () => _moveTo(index),
+                                              child: Padding(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 10,
+                                                    ),
+                                                child: Row(
+                                                  children: [
+                                                    SizedBox(
+                                                      width: 58,
+                                                      child: Text(
+                                                        entry.type ==
+                                                                DayEntryType
+                                                                    .daily
+                                                            ? 'DAILY'
+                                                            : _entryTime(entry),
+                                                        maxLines: 1,
+                                                        overflow:
+                                                            TextOverflow.fade,
+                                                        softWrap: false,
+                                                        style: const TextStyle(
+                                                          fontSize: 8,
+                                                          letterSpacing: .65,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    const SizedBox(width: 7),
+                                                    Expanded(
+                                                      child: Text(
+                                                        _entryExcerpt(entry),
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        style: TextStyle(
+                                                          fontSize: 11,
+                                                          fontWeight: isCentered
+                                                              ? FontWeight.w600
+                                                              : FontWeight.w400,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
     );
   }
-}
-
-class _GlassSurface extends StatelessWidget {
-  const _GlassSurface({required this.child});
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) => ClipRRect(
-    borderRadius: BorderRadius.circular(16),
-    child: BackdropFilter(
-      filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: MediaQuery.highContrastOf(context)
-              ? const Color(0xFFFFFCF5)
-              : const Color(0xCFFFFCF5),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0x4D4F4B56)),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x16000000),
-              blurRadius: 16,
-              offset: Offset(0, 7),
-            ),
-          ],
-        ),
-        child: child,
-      ),
-    ),
-  );
 }
 
 class _CompactAction extends StatelessWidget {
