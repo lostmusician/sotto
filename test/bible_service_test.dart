@@ -47,9 +47,45 @@ void main() {
         'NKJV',
       ]);
       expect(versions.every((version) => !version.isOffline), isTrue);
-      expect(requestedUri?.queryParametersAll['language_ranges[]'], ['en']);
+      expect(requestedUri?.queryParametersAll['language_ranges[]'], ['en*']);
       expect(requestedUri?.queryParameters, isNot(contains('language_ranges')));
     });
+
+    test(
+      'discovers an accessible NIV directly when the collection omits it',
+      () async {
+        final requestedPaths = <String>[];
+        final provider = YouVersionBibleProvider(
+          appKey: 'fixture',
+          client: MockClient((request) async {
+            requestedPaths.add(request.url.path);
+            if (request.url.path == '/v1/bibles') {
+              return http.Response(
+                jsonEncode({
+                  'data': [_versionJson(3034, 'BSB', 'Berean Standard Bible')],
+                }),
+                200,
+              );
+            }
+            if (request.url.path == '/v1/bibles/111') {
+              return http.Response(
+                jsonEncode(
+                  _versionJson(111, 'NIV', 'New International Version'),
+                ),
+                200,
+              );
+            }
+            return http.Response('{"message":"Not licensed"}', 403);
+          }),
+        );
+        addTearDown(provider.close);
+
+        final versions = await provider.versions();
+
+        expect(versions.map((version) => version.abbreviation), ['NIV']);
+        expect(requestedPaths, contains('/v1/bibles/111'));
+      },
+    );
 
     test('includes API validation details in request errors', () async {
       final provider = YouVersionBibleProvider(

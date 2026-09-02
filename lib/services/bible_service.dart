@@ -32,6 +32,12 @@ class YouVersionBibleProvider implements BibleProvider {
   final http.Client _client;
   static final _base = Uri.parse('https://api.youversion.com/v1/');
   static const supportedAbbreviations = ['ESV', 'NIV', 'ERV', 'NKJV'];
+  static const _supportedVersionIds = {
+    'ESV': '59',
+    'NIV': '111',
+    'ERV': '406',
+    'NKJV': '114',
+  };
 
   bool get isConfigured => appKey.isNotEmpty;
 
@@ -46,28 +52,58 @@ class YouVersionBibleProvider implements BibleProvider {
 
   @override
   Future<List<BibleVersion>> versions() async {
-    final json = await _get('bibles?language_ranges%5B%5D=en&page_size=99');
+    final json = await _get('bibles?language_ranges%5B%5D=en%2A&page_size=99');
     final versions = (json['data'] as List<dynamic>? ?? const [])
         .cast<Map<String, dynamic>>()
-        .map(
-          (item) => BibleVersion(
-            id: '${item['id']}',
-            abbreviation:
-                '${item['localized_abbreviation'] ?? item['abbreviation']}',
-            title: '${item['localized_title'] ?? item['title']}',
-            languageTag: '${item['language_tag'] ?? 'en'}',
-            copyright: '${item['copyright'] ?? ''}',
-          ),
-        )
+        .map(_versionFromJson)
         .toList();
     final byAbbreviation = {
       for (final version in versions)
         version.abbreviation.trim().toUpperCase(): version,
     };
+
+    // Some app keys can fetch an approved Bible by ID even when the collection
+    // endpoint omits it. Fall back to the canonical IDs only when discovery
+    // found none of the product-supported translations.
+    if (!supportedAbbreviations.any(byAbbreviation.containsKey)) {
+      final directVersions = await Future.wait(
+        _supportedVersionIds.entries.map(_versionByIdOrNull),
+      );
+      for (final version in directVersions.nonNulls) {
+        byAbbreviation[version.abbreviation.trim().toUpperCase()] = version;
+      }
+    }
+
     return [
       for (final abbreviation in supportedAbbreviations)
         ?byAbbreviation[abbreviation],
     ];
+  }
+
+  BibleVersion _versionFromJson(Map<String, dynamic> item) => BibleVersion(
+    id: '${item['id']}',
+    abbreviation: '${item['localized_abbreviation'] ?? item['abbreviation']}',
+    title: '${item['localized_title'] ?? item['title']}',
+    languageTag: '${item['language_tag'] ?? 'en'}',
+    copyright: '${item['copyright'] ?? ''}',
+  );
+
+  Future<BibleVersion?> _versionByIdOrNull(
+    MapEntry<String, String> entry,
+  ) async {
+    try {
+      final detail = await _get('bibles/${entry.value}');
+      final data = detail['data'] is Map<String, dynamic>
+          ? detail['data']! as Map<String, dynamic>
+          : detail;
+      final version = _versionFromJson(data);
+      return version.abbreviation.trim().toUpperCase() == entry.key
+          ? version
+          : null;
+    } catch (_) {
+      // An unavailable version is expected when its license is absent.
+      return null;
+    }
   }
 
   @override
