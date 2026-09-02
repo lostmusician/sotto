@@ -1,41 +1,146 @@
 # Sotto
 
-Sotto is a private, local-first journal organized like a daily binder. Each
-recorded date has one pinned Daily Journal, a gratitude footer, a shared mood
-check-in, and room for any number of separate additional entries. Journal text,
-gratitude, mood coordinates, and preferences stay on-device.
+Sotto is a private, local-first journal for desktop and mobile. It combines a
+quiet full-page editor with a horizontal daily binder, optional on-device smart
+organization, and an opt-in Scripture workspace for Christian reflection.
 
-## Run
+Journal writing, gratitude, mood, tags, relationships, Scripture attachments,
+and preferences are stored on the device. The core journal does not require an
+account, network connection, or AI model.
+
+## The journal experience
+
+- One pinned **Daily Journal** for each recorded date, with a gratitude footer.
+- Any number of separate **Additional Entries** in the same day.
+- A shared daily mood check-in represented as reflective tone and intensity,
+  not a diagnosis.
+- Time-aware routing: before the configured evening time Sotto opens an
+  unfinished Daily Journal; in the evening it asks for a missing mood first.
+- A fast horizontal binder for browsing recorded days, weeks, and months.
+- A compact, always-visible entry wheel for moving between a day's entries.
+- Historical writing, gratitude, and mood remain editable.
+
+Daily completion only requires a non-empty Daily Journal and a mood check-in.
+Gratitude and Additional Entries are always optional.
+
+## Smart Organization
+
+Smart Organization is optional and runs locally:
+
+- RAKE-based keyphrase extraction generates editable tags without downloading
+  a model.
+- Full-text search filters by text, tag, purpose, Scripture book, and date.
+- A ranked Related Entries view is the primary cross-reference experience.
+- A bounded Connections graph shows at most 40 entries and the three strongest
+  relationships per entry.
+- An optional quantized
+  [Snowflake Arctic Embed XS](https://huggingface.co/Snowflake/snowflake-arctic-embed-xs)
+  ONNX model improves semantic matching. It is English-first, downloads on
+  demand from Settings, and is verified before use.
+
+If the embedding model is absent or unavailable, tag extraction, full-text
+search, and shared-tag relationships continue to work. Generated tags never
+replace manual tags.
+
+## Christian Mode
+
+Christian Mode is opt-in and hidden when disabled. It adds:
+
+- The public-domain Berean Standard Bible for guaranteed offline reading and
+  search.
+- A Scripture workspace shown beside the editor on desktop and as a full-height
+  sheet on phones.
+- Structured verse attachments and insertion at the editor cursor.
+- Quiet Time entries with optional Observation, Application, and Prayer fields.
+- Optional YouVersion translations when the app has an approved registration,
+  the requested translation is licensed, and the device is online.
+
+Only user-authored reflection and structured Scripture references are embedded.
+Licensed passage text is not stored in journal records.
+
+### Optional YouVersion setup
+
+Register the app and follow the current
+[YouVersion Platform API requirements](https://developers.youversion.com/api-usage).
+Supply the key at build or run time; never commit it:
+
+```sh
+flutter run -d macos --dart-define=YOUVERSION_APP_KEY=your_app_key
+```
+
+Without a key, Sotto falls back to the bundled offline Bible. YouVersion
+passages retain their required translation label and copyright attribution.
+
+## Getting started
+
+Install Flutter and the platform toolchain for the device you want to run, then:
 
 ```sh
 flutter pub get
 flutter run -d macos
 ```
 
-Before the configured evening time, Sotto opens directly to an unfinished Daily
-Journal. In the evening it asks for mood first. Once both are recorded, the
-horizontal binder becomes home; mood and writing remain editable at any time.
+Use `flutter devices` to find an attached phone, simulator, or other available
+desktop target and pass its identifier to `flutter run -d`.
 
 ## Architecture
 
-- `lib/models` — journal days, day entries, mood check-ins, phases, and cursors
-- `lib/services` — schema-v3 SQLite storage and legacy migration
-- `lib/providers` — time-aware routing, editor state, and binder pagination
-- `lib/ui` — mood dial, vertical entry stack, and horizontal binder zooms
+- `lib/models` — journal, discovery, embedding, and Scripture data types.
+- `lib/services/database_service.dart` — schema-v4 SQLite persistence, FTS5,
+  pagination, migrations, and local search.
+- `lib/services/keyphrase_service.dart` — RAKE extraction and journal-specific
+  phrase filtering.
+- `lib/services/embedding_service.dart` — model lifecycle, checksum validation,
+  tokenization, and ONNX inference.
+- `lib/services/organization_service.dart` — tagging, canonicalization, gradual
+  indexing, and related-entry ranking.
+- `lib/services/bible_service.dart` — bundled and YouVersion Bible providers.
+- `lib/providers` — time-aware routing, editor state, binder navigation, and
+  capability-aware optional services.
+- `lib/ui` — mood dial, full-page editor, binder, discovery, settings, and
+  Scripture workspace.
 
-Desktop uses `sqflite_common_ffi` where needed; Apple and Android targets use
-the native `sqflite` implementation. Drafts save after 700ms of inactivity.
-Recorded dates paginate with stable date-key cursors, while day/week/month views
-retain the focused date as their zoom anchor. AI prompts, summaries, tagging,
-and embeddings are intentionally outside this version.
+SQLite schema version 4 preserves legacy journal and reflection data while
+adding tags, embeddings, relationships, Scripture attachments, Quiet Time
+fields, entry purposes, and a synchronized FTS5 index. Drafts autosave after
+700 ms of inactivity. Optional back-catalog indexing is cancellable and never
+blocks journal editing.
 
-## Verify
+## Verification
 
 ```sh
 flutter analyze
 flutter test
 flutter build macos --debug
+flutter test integration_test/embedding_smoke_test.dart -d macos
 ```
 
-Android source is generated, but building it requires an installed Android SDK.
-Windows release validation requires a Windows host.
+The embedding smoke test downloads the model into a temporary directory,
+validates its checksum, runs native ONNX inference, and removes the temporary
+copy afterward.
+
+Current verification status:
+
+| Target | Status |
+| --- | --- |
+| macOS 14+ | Analyzer, full tests, debug build, and native embedding smoke test verified |
+| iOS 16+ | Source configured; requires an Apple mobile build environment and signing |
+| Android | Source configured; build verification requires an installed Android SDK |
+| Windows | Flutter project target is present; release validation requires a Windows host |
+| Linux | Not currently generated in this repository |
+
+## Privacy and network behavior
+
+- Journal data and analysis stay on-device.
+- Smart Organization only uses the network to download its optional model.
+- Christian Mode only uses the network for explicitly selected YouVersion
+  content; the bundled Bible remains available offline.
+- No API keys are stored in the repository.
+
+## License
+
+Sotto is available under the [MIT License](LICENSE). Bundled data, models,
+packages, and remote Bible translations retain their respective licenses and
+attribution requirements. Arctic Embed XS is Apache-2.0 licensed; YouVersion
+content is governed by the terms and translation licenses granted to the
+registered app.

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/journal_entry.dart';
 import '../providers/journal_providers.dart';
+import 'discovery_screen.dart';
 import 'mood_dial.dart';
 
 class BinderScreen extends ConsumerStatefulWidget {
@@ -39,6 +41,7 @@ class _BinderScreenState extends ConsumerState<BinderScreen>
         setState(() => _railPosition = animation.value);
         _commitNearest(_currentItems);
       });
+    HardwareKeyboard.instance.addHandler(_handleGlobalKeyEvent);
     Future.microtask(() {
       final anchor = ref.read(journalControllerProvider).selectedDateKey;
       ref
@@ -50,6 +53,7 @@ class _BinderScreenState extends ConsumerState<BinderScreen>
   @override
   void dispose() {
     _snapTimer?.cancel();
+    HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
     _motionController.dispose();
     super.dispose();
   }
@@ -164,23 +168,60 @@ class _BinderScreenState extends ConsumerState<BinderScreen>
     _animateToIndex(_selectedIndex + delta, _currentItems);
   }
 
-  Future<void> _changeEveningTime() async {
-    final preference = ref.read(journalControllerProvider).eveningPreference;
-    final selected = await showTimePicker(
+  bool _handleGlobalKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+    final key = event.logicalKey;
+    final modifier =
+        HardwareKeyboard.instance.isMetaPressed ||
+        HardwareKeyboard.instance.isControlPressed;
+    if (modifier &&
+        (key == LogicalKeyboardKey.equal || key == LogicalKeyboardKey.add)) {
+      _zoomBy(-1);
+      return true;
+    }
+    if (modifier && key == LogicalKeyboardKey.minus) {
+      _zoomBy(1);
+      return true;
+    }
+    final delta = switch (key) {
+      LogicalKeyboardKey.arrowLeft => 1,
+      LogicalKeyboardKey.arrowRight => -1,
+      LogicalKeyboardKey.pageDown => 5,
+      LogicalKeyboardKey.pageUp => -5,
+      _ => 0,
+    };
+    if (delta == 0) return false;
+    _moveKeyboard(delta);
+    return true;
+  }
+
+  Future<void> _openSettings() async {
+    await showModalBottomSheet<void>(
       context: context,
-      initialTime: TimeOfDay(hour: preference.hour, minute: preference.minute),
-      helpText: 'When does evening begin?',
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => const SottoSettingsSheet(),
     );
-    if (selected == null) return;
-    await ref
-        .read(journalControllerProvider.notifier)
-        .updateEveningPreference(selected.hour * 60 + selected.minute);
+  }
+
+  Future<void> _openDiscovery() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => const DiscoverySheet(),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final binder = ref.watch(binderControllerProvider);
     final app = ref.watch(journalControllerProvider);
+    ref.listen<List<BinderDay>>(
+      binderControllerProvider.select((state) => state.days),
+      (_, days) =>
+          ref.read(discoveryControllerProvider.notifier).loadForDays(days),
+    );
     final items = _itemsFor(binder);
     _currentItems = items;
     if (items.isNotEmpty && !_initialAnchorSynced) {
@@ -202,244 +243,222 @@ class _BinderScreenState extends ConsumerState<BinderScreen>
         if (mounted) _jumpToIndex(items.length - 1, items);
       });
     }
-    final shortcuts = <ShortcutActivator, VoidCallback>{
-      const SingleActivator(LogicalKeyboardKey.equal, meta: true): () =>
-          _zoomBy(-1),
-      const SingleActivator(LogicalKeyboardKey.add, meta: true): () =>
-          _zoomBy(-1),
-      const SingleActivator(LogicalKeyboardKey.minus, meta: true): () =>
-          _zoomBy(1),
-      const SingleActivator(LogicalKeyboardKey.equal, control: true): () =>
-          _zoomBy(-1),
-      const SingleActivator(LogicalKeyboardKey.add, control: true): () =>
-          _zoomBy(-1),
-      const SingleActivator(LogicalKeyboardKey.minus, control: true): () =>
-          _zoomBy(1),
-      const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
-          _moveKeyboard(1),
-      const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
-          _moveKeyboard(-1),
-      const SingleActivator(LogicalKeyboardKey.pageDown): () =>
-          _moveKeyboard(5),
-      const SingleActivator(LogicalKeyboardKey.pageUp): () => _moveKeyboard(-5),
-    };
-
-    return CallbackShortcuts(
-      bindings: shortcuts,
-      child: Focus(
-        autofocus: true,
-        child: ColoredBox(
-          color: const Color(0xFFF1EEE6),
-          child: SafeArea(
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 14, 8),
-                  child: Row(
-                    children: [
-                      const Expanded(
-                        child: Text(
-                          'Your days',
-                          style: TextStyle(
-                            fontFamily: 'Georgia',
-                            fontSize: 28,
-                            fontWeight: FontWeight.w600,
-                          ),
+    return Focus(
+      autofocus: true,
+      child: ColoredBox(
+        color: const Color(0xFFF1EEE6),
+        child: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 14, 8),
+                child: Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Your days',
+                        style: TextStyle(
+                          fontFamily: 'Georgia',
+                          fontSize: 28,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
-                      IconButton(
-                        key: const Key('binder-settings'),
-                        tooltip: 'Evening settings',
-                        onPressed: _changeEveningTime,
-                        icon: const Icon(Icons.schedule_rounded),
-                      ),
-                    ],
-                  ),
+                    ),
+                    IconButton(
+                      key: const Key('binder-discovery'),
+                      tooltip: 'Search and connections',
+                      onPressed: _openDiscovery,
+                      icon: const Icon(Icons.auto_awesome_mosaic_outlined),
+                    ),
+                    IconButton(
+                      key: const Key('binder-settings'),
+                      tooltip: 'Settings',
+                      onPressed: _openSettings,
+                      icon: const Icon(Icons.tune_rounded),
+                    ),
+                  ],
                 ),
-                if (app.showMoodReminder)
-                  _MoodReminder(
-                    onPressed: () async {
-                      await ref
-                          .read(journalControllerProvider.notifier)
-                          .openMood(localDateKey(DateTime.now()));
-                    },
-                  ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: SegmentedButton<BinderZoom>(
-                    key: const Key('binder-zoom'),
-                    showSelectedIcon: false,
-                    segments: const [
-                      ButtonSegment(
-                        value: BinderZoom.days,
-                        label: Text('Days'),
-                      ),
-                      ButtonSegment(
-                        value: BinderZoom.weeks,
-                        label: Text('Weeks'),
-                      ),
-                      ButtonSegment(
-                        value: BinderZoom.months,
-                        label: Text('Months'),
-                      ),
-                    ],
-                    selected: {binder.zoom},
-                    onSelectionChanged: (value) => _changeZoom(value.first),
-                  ),
+              ),
+              if (app.showMoodReminder)
+                _MoodReminder(
+                  onPressed: () async {
+                    await ref
+                        .read(journalControllerProvider.notifier)
+                        .openMood(localDateKey(DateTime.now()));
+                  },
                 ),
-                const SizedBox(height: 10),
-                Expanded(
-                  child: items.isEmpty && !binder.isLoading
-                      ? const Center(
-                          child: Text(
-                            'Your first recorded day will appear here.',
-                            style: TextStyle(fontStyle: FontStyle.italic),
-                          ),
-                        )
-                      : LayoutBuilder(
-                          builder: (context, constraints) {
-                            final compact = constraints.maxWidth < 600;
-                            final pitch = compact ? 14.0 : 24.0;
-                            final transitionDuration =
-                                MediaQuery.disableAnimationsOf(context)
-                                ? Duration.zero
-                                : const Duration(milliseconds: 260);
-                            return AnimatedSwitcher(
-                              key: const Key('binder-zoom-transition'),
-                              duration: transitionDuration,
-                              reverseDuration: transitionDuration,
-                              layoutBuilder: (currentChild, previousChildren) {
-                                final children = <Widget>[...previousChildren];
-                                if (currentChild != null) {
-                                  children.add(currentChild);
-                                }
-                                return Stack(
-                                  fit: StackFit.expand,
-                                  children: children,
-                                );
-                              },
-                              transitionBuilder: (child, animation) =>
-                                  FadeTransition(
-                                    opacity: CurvedAnimation(
-                                      parent: animation,
-                                      curve: Curves.easeOutCubic,
-                                    ),
-                                    child: ScaleTransition(
-                                      alignment: Alignment.center,
-                                      scale: Tween<double>(begin: .94, end: 1)
-                                          .animate(
-                                            CurvedAnimation(
-                                              parent: animation,
-                                              curve: Curves.easeOutCubic,
-                                            ),
-                                          ),
-                                      child: child,
-                                    ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: SegmentedButton<BinderZoom>(
+                  key: const Key('binder-zoom'),
+                  showSelectedIcon: false,
+                  segments: const [
+                    ButtonSegment(value: BinderZoom.days, label: Text('Days')),
+                    ButtonSegment(
+                      value: BinderZoom.weeks,
+                      label: Text('Weeks'),
+                    ),
+                    ButtonSegment(
+                      value: BinderZoom.months,
+                      label: Text('Months'),
+                    ),
+                  ],
+                  selected: {binder.zoom},
+                  onSelectionChanged: (value) => _changeZoom(value.first),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Expanded(
+                child: items.isEmpty && !binder.isLoading
+                    ? const Center(
+                        child: Text(
+                          'Your first recorded day will appear here.',
+                          style: TextStyle(fontStyle: FontStyle.italic),
+                        ),
+                      )
+                    : LayoutBuilder(
+                        builder: (context, constraints) {
+                          final compact = constraints.maxWidth < 600;
+                          final pitch = compact ? 14.0 : 24.0;
+                          final transitionDuration =
+                              MediaQuery.disableAnimationsOf(context)
+                              ? Duration.zero
+                              : const Duration(milliseconds: 260);
+                          return AnimatedSwitcher(
+                            key: const Key('binder-zoom-transition'),
+                            duration: transitionDuration,
+                            reverseDuration: transitionDuration,
+                            layoutBuilder: (currentChild, previousChildren) {
+                              final children = <Widget>[...previousChildren];
+                              if (currentChild != null) {
+                                children.add(currentChild);
+                              }
+                              return Stack(
+                                fit: StackFit.expand,
+                                children: children,
+                              );
+                            },
+                            transitionBuilder: (child, animation) =>
+                                FadeTransition(
+                                  opacity: CurvedAnimation(
+                                    parent: animation,
+                                    curve: Curves.easeOutCubic,
                                   ),
-                              child: KeyedSubtree(
-                                key: ValueKey(binder.zoom),
-                                child: Listener(
-                                  key: const Key('binder-rail'),
-                                  onPointerSignal: (event) {
-                                    if (event is! PointerScrollEvent) return;
+                                  child: ScaleTransition(
+                                    alignment: Alignment.center,
+                                    scale: Tween<double>(begin: .94, end: 1)
+                                        .animate(
+                                          CurvedAnimation(
+                                            parent: animation,
+                                            curve: Curves.easeOutCubic,
+                                          ),
+                                        ),
+                                    child: child,
+                                  ),
+                                ),
+                            child: KeyedSubtree(
+                              key: ValueKey(binder.zoom),
+                              child: Listener(
+                                key: const Key('binder-rail'),
+                                onPointerSignal: (event) {
+                                  if (event is! PointerScrollEvent) return;
+                                  final delta =
+                                      event.scrollDelta.dx.abs() >
+                                          event.scrollDelta.dy.abs()
+                                      ? event.scrollDelta.dx
+                                      : event.scrollDelta.dy;
+                                  _moveBy(delta / pitch, items);
+                                  _scheduleSnap(items);
+                                },
+                                onPointerPanZoomStart: (_) {
+                                  _motionController.stop();
+                                  _scaleHandled = false;
+                                },
+                                onPointerPanZoomUpdate: (event) {
+                                  if (!_scaleHandled && event.scale > 1.12) {
+                                    _scaleHandled = true;
+                                    _zoomBy(-1);
+                                    return;
+                                  }
+                                  if (!_scaleHandled && event.scale < .88) {
+                                    _scaleHandled = true;
+                                    _zoomBy(1);
+                                    return;
+                                  }
+                                  if (!_scaleHandled) {
                                     final delta =
-                                        event.scrollDelta.dx.abs() >
-                                            event.scrollDelta.dy.abs()
-                                        ? event.scrollDelta.dx
-                                        : event.scrollDelta.dy;
+                                        event.panDelta.dx.abs() >
+                                            event.panDelta.dy.abs()
+                                        ? -event.panDelta.dx
+                                        : event.panDelta.dy;
                                     _moveBy(delta / pitch, items);
-                                    _scheduleSnap(items);
-                                  },
-                                  onPointerPanZoomStart: (_) {
+                                  }
+                                },
+                                onPointerPanZoomEnd: (_) => _animateToIndex(
+                                  _railPosition.round(),
+                                  items,
+                                ),
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onScaleStart: (_) {
                                     _motionController.stop();
                                     _scaleHandled = false;
                                   },
-                                  onPointerPanZoomUpdate: (event) {
-                                    if (!_scaleHandled && event.scale > 1.12) {
-                                      _scaleHandled = true;
-                                      _zoomBy(-1);
-                                      return;
-                                    }
-                                    if (!_scaleHandled && event.scale < .88) {
-                                      _scaleHandled = true;
-                                      _zoomBy(1);
+                                  onScaleUpdate: (details) {
+                                    if (details.pointerCount > 1) {
+                                      if (!_scaleHandled &&
+                                          details.scale > 1.12) {
+                                        _scaleHandled = true;
+                                        _zoomBy(-1);
+                                      } else if (!_scaleHandled &&
+                                          details.scale < .88) {
+                                        _scaleHandled = true;
+                                        _zoomBy(1);
+                                      }
                                       return;
                                     }
                                     if (!_scaleHandled) {
-                                      final delta =
-                                          event.panDelta.dx.abs() >
-                                              event.panDelta.dy.abs()
-                                          ? -event.panDelta.dx
-                                          : event.panDelta.dy;
-                                      _moveBy(delta / pitch, items);
+                                      _moveBy(
+                                        -details.focalPointDelta.dx / pitch,
+                                        items,
+                                      );
                                     }
                                   },
-                                  onPointerPanZoomEnd: (_) => _animateToIndex(
-                                    _railPosition.round(),
-                                    items,
-                                  ),
-                                  child: GestureDetector(
-                                    behavior: HitTestBehavior.opaque,
-                                    onScaleStart: (_) {
-                                      _motionController.stop();
-                                      _scaleHandled = false;
-                                    },
-                                    onScaleUpdate: (details) {
-                                      if (details.pointerCount > 1) {
-                                        if (!_scaleHandled &&
-                                            details.scale > 1.12) {
-                                          _scaleHandled = true;
-                                          _zoomBy(-1);
-                                        } else if (!_scaleHandled &&
-                                            details.scale < .88) {
-                                          _scaleHandled = true;
-                                          _zoomBy(1);
-                                        }
-                                        return;
-                                      }
-                                      if (!_scaleHandled) {
-                                        _moveBy(
-                                          -details.focalPointDelta.dx / pitch,
-                                          items,
-                                        );
-                                      }
-                                    },
-                                    onScaleEnd: (details) {
-                                      if (!_scaleHandled) {
-                                        _snapWithVelocity(
-                                          details.velocity.pixelsPerSecond.dx,
-                                          items,
-                                        );
-                                      }
-                                    },
-                                    child: _BinderRail(
-                                      key: const Key('binder-pages'),
-                                      items: items,
-                                      zoom: binder.zoom,
-                                      position: _railPosition,
-                                      selectedIndex: _selectedIndex.clamp(
-                                        0,
-                                        items.length - 1,
-                                      ),
-                                      pitch: pitch,
-                                      compact: compact,
-                                      onSelect: (index) =>
-                                          _animateToIndex(index, items),
+                                  onScaleEnd: (details) {
+                                    if (!_scaleHandled) {
+                                      _snapWithVelocity(
+                                        details.velocity.pixelsPerSecond.dx,
+                                        items,
+                                      );
+                                    }
+                                  },
+                                  child: _BinderRail(
+                                    key: const Key('binder-pages'),
+                                    items: items,
+                                    zoom: binder.zoom,
+                                    position: _railPosition,
+                                    selectedIndex: _selectedIndex.clamp(
+                                      0,
+                                      items.length - 1,
                                     ),
+                                    pitch: pitch,
+                                    compact: compact,
+                                    onSelect: (index) =>
+                                        _animateToIndex(index, items),
                                   ),
                                 ),
                               ),
-                            );
-                          },
-                        ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+              if (binder.isLoading)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 12),
+                  child: LinearProgressIndicator(),
                 ),
-                if (binder.isLoading)
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 12),
-                    child: LinearProgressIndicator(),
-                  ),
-              ],
-            ),
+            ],
           ),
         ),
       ),
@@ -588,9 +607,15 @@ class _PaperEdge extends StatelessWidget {
               child: Container(
                 width: 18,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFFCF5),
+                  color: Color.alphaBlend(
+                    accent.withValues(alpha: .18),
+                    const Color(0xD9FFFCF5),
+                  ),
                   borderRadius: BorderRadius.circular(9),
-                  border: Border(top: BorderSide(color: accent, width: 5)),
+                  border: Border.all(
+                    color: accent.withValues(alpha: .68),
+                    width: 1.5,
+                  ),
                   boxShadow: const [
                     BoxShadow(
                       color: Color(0x21000000),
@@ -651,147 +676,215 @@ class _BinderSheet extends ConsumerWidget {
     final gratitudeCount = item.days
         .where((day) => day.day.gratitude.trim().isNotEmpty)
         .length;
+    final discovery = ref.watch(discoveryControllerProvider);
+    final itemEntryIds = item.days
+        .expand((day) => day.entries)
+        .map((entry) => entry.id)
+        .toSet();
+    final tags = <String>{
+      for (final entryId in itemEntryIds)
+        for (final entryTag in discovery.entryTags[entryId] ?? const [])
+          entryTag.tag.name,
+    }.take(3).toList();
+    final relatedCount = <String>{
+      for (final entryId in itemEntryIds)
+        for (final relationship in discovery.relationships[entryId] ?? const [])
+          relationship.targetEntryId,
+    }.difference(itemEntryIds).length;
+    final highContrast = MediaQuery.highContrastOf(context);
     return Semantics(
       label: '${item.label}, ${item.days.length} recorded days',
       child: Container(
         key: Key('binder-sheet-${item.anchorDateKey}'),
         margin: const EdgeInsets.fromLTRB(8, 18, 8, 30),
         padding: const EdgeInsets.all(28),
+        clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
-          color: const Color(0xFFFFFCF5),
+          color: highContrast
+              ? const Color(0xFFFFFCF5)
+              : Color.alphaBlend(
+                  accent.withValues(alpha: .12),
+                  const Color(0xD9FFFCF5),
+                ),
           borderRadius: BorderRadius.circular(28),
-          border: Border(top: BorderSide(color: accent, width: 7)),
-          boxShadow: const [
+          border: highContrast
+              ? Border.all(color: accent, width: 3)
+              : Border.all(color: accent.withValues(alpha: .48), width: 1.4),
+          boxShadow: [
             BoxShadow(
-              color: Color(0x22000000),
+              color: accent.withValues(alpha: .16),
+              blurRadius: 34,
+              spreadRadius: 2,
+            ),
+            const BoxShadow(
+              color: Color(0x26000000),
               blurRadius: 24,
               offset: Offset(0, 12),
             ),
           ],
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              item.label,
-              style: const TextStyle(
-                fontFamily: 'Georgia',
-                fontSize: 27,
-                fontWeight: FontWeight.w600,
+        child: BackdropFilter(
+          filter: ImageFilter.blur(
+            sigmaX: highContrast ? 0 : 14,
+            sigmaY: highContrast ? 0 : 14,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                item.label,
+                style: const TextStyle(
+                  fontFamily: 'Georgia',
+                  fontSize: 27,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-            ),
-            const SizedBox(height: 18),
-            if (zoom == BinderZoom.days) ...[
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+              if (tags.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
                   children: [
-                    Text(
-                      excerpt.isEmpty ? 'A quiet page.' : excerpt,
-                      maxLines: 8,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontFamily: 'Georgia',
-                        fontSize: 21,
-                        height: 1.5,
+                    for (final tag in tags)
+                      Chip(
+                        visualDensity: VisualDensity.compact,
+                        side: BorderSide(color: accent.withValues(alpha: .45)),
+                        backgroundColor: accent.withValues(alpha: .11),
+                        label: Text(tag),
                       ),
-                    ),
-                    if (primary.day.gratitude.trim().isNotEmpty) ...[
-                      const SizedBox(height: 26),
-                      const Text(
-                        'GRATEFUL FOR',
-                        style: TextStyle(fontSize: 11, letterSpacing: 1.1),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        primary.day.gratitude,
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontStyle: FontStyle.italic),
-                      ),
-                    ],
-                    if (additionalCount > 0) ...[
-                      const SizedBox(height: 24),
-                      Text(
-                        '$additionalCount additional ${additionalCount == 1 ? 'entry' : 'entries'}',
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        primary.additionalEntries
-                            .map((entry) => _entryTime(entry.createdAt))
-                            .join('  ·  '),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    if (relatedCount > 0)
+                      ActionChip(
+                        visualDensity: VisualDensity.compact,
+                        avatar: const Icon(Icons.link_rounded, size: 16),
+                        label: Text('$relatedCount related'),
+                        onPressed: () => showModalBottomSheet<void>(
+                          context: context,
+                          isScrollControlled: true,
+                          showDragHandle: true,
+                          builder: (context) =>
+                              DiscoverySheet(initialEntryId: daily?.id),
                         ),
                       ),
-                    ],
                   ],
                 ),
-              ),
+              ],
               const SizedBox(height: 18),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  FilledButton.tonal(
-                    key: const Key('edit-journal'),
-                    onPressed: () => ref
-                        .read(journalControllerProvider.notifier)
-                        .openDay(primary.day.dateKey),
-                    child: const Text('Edit journal'),
-                  ),
-                  TextButton(
-                    key: const Key('add-entry'),
-                    onPressed: () => ref
-                        .read(journalControllerProvider.notifier)
-                        .openDay(primary.day.dateKey, createAdditional: true),
-                    child: const Text('Add entry'),
-                  ),
-                  TextButton(
-                    key: const Key('edit-mood'),
-                    onPressed: () => ref
-                        .read(journalControllerProvider.notifier)
-                        .openMood(primary.day.dateKey),
-                    child: const Text('Edit mood'),
-                  ),
-                ],
-              ),
-            ] else ...[
-              Expanded(
-                child: Center(
+              if (zoom == BinderZoom.days) ...[
+                Expanded(
                   child: Column(
-                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Container(
-                        width: 76,
-                        height: 76,
-                        decoration: BoxDecoration(
-                          color: accent,
-                          shape: BoxShape.circle,
+                      Text(
+                        excerpt.isEmpty ? 'A quiet page.' : excerpt,
+                        maxLines: 8,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontFamily: 'Georgia',
+                          fontSize: 21,
+                          height: 1.5,
                         ),
                       ),
-                      const SizedBox(height: 20),
-                      Text(
-                        '${item.days.length} recorded ${item.days.length == 1 ? 'day' : 'days'}',
-                        style: const TextStyle(fontSize: 18),
-                      ),
-                      const SizedBox(height: 8),
-                      Text('$additionalCount additional entries'),
-                      const SizedBox(height: 8),
-                      Text(
-                        '$gratitudeCount with gratitude',
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      if (primary.day.gratitude.trim().isNotEmpty) ...[
+                        const SizedBox(height: 26),
+                        const Text(
+                          'GRATEFUL FOR',
+                          style: TextStyle(fontSize: 11, letterSpacing: 1.1),
                         ),
-                      ),
+                        const SizedBox(height: 8),
+                        Text(
+                          primary.day.gratitude,
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontStyle: FontStyle.italic),
+                        ),
+                      ],
+                      if (additionalCount > 0) ...[
+                        const SizedBox(height: 24),
+                        Text(
+                          '$additionalCount additional ${additionalCount == 1 ? 'entry' : 'entries'}',
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          primary.additionalEntries
+                              .map((entry) => _entryTime(entry.createdAt))
+                              .join('  ·  '),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
-              ),
+                const SizedBox(height: 18),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FilledButton.tonal(
+                      key: const Key('edit-journal'),
+                      onPressed: () => ref
+                          .read(journalControllerProvider.notifier)
+                          .openDay(primary.day.dateKey),
+                      child: const Text('Edit journal'),
+                    ),
+                    TextButton(
+                      key: const Key('add-entry'),
+                      onPressed: () => ref
+                          .read(journalControllerProvider.notifier)
+                          .openDay(primary.day.dateKey, createAdditional: true),
+                      child: const Text('Add entry'),
+                    ),
+                    TextButton(
+                      key: const Key('edit-mood'),
+                      onPressed: () => ref
+                          .read(journalControllerProvider.notifier)
+                          .openMood(primary.day.dateKey),
+                      child: const Text('Edit mood'),
+                    ),
+                  ],
+                ),
+              ] else ...[
+                Expanded(
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 76,
+                          height: 76,
+                          decoration: BoxDecoration(
+                            color: accent,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                        Text(
+                          '${item.days.length} recorded ${item.days.length == 1 ? 'day' : 'days'}',
+                          style: const TextStyle(fontSize: 18),
+                        ),
+                        const SizedBox(height: 8),
+                        Text('$additionalCount additional entries'),
+                        const SizedBox(height: 8),
+                        Text(
+                          '$gratitudeCount with gratitude',
+                          style: TextStyle(
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );
