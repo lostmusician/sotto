@@ -40,9 +40,15 @@ dependencies:
   path: ^1.9.1
   path_provider: ^2.1.6
   uuid: ^4.6.0
+  text_analysis: 1.0.0+2
+  http: ^1.6.0
+  crypto: ^3.0.7
+  flutter_onnxruntime: ^1.8.4
 
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+  integration_test:
     sdk: flutter
 
   # The "flutter_lints" package below contains a set of recommended lints to
@@ -62,6 +68,8 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+  assets:
+    - assets/bible/
 
   # To add assets to your application, add an assets section, like this:
   # assets:
