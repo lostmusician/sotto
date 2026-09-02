@@ -5,14 +5,18 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
 import '../models/journal_entry.dart';
 import '../providers/journal_providers.dart';
 import 'binder_screen.dart';
 import 'mood_dial.dart';
+import 'scripture_screen.dart';
 
 class EditorScreen extends ConsumerStatefulWidget {
-  const EditorScreen({super.key});
+  const EditorScreen({this.autoInitialize = true, super.key});
+
+  final bool autoInitialize;
 
   @override
   ConsumerState<EditorScreen> createState() => _EditorScreenState();
@@ -29,15 +33,18 @@ class _EditorScreenState extends ConsumerState<EditorScreen>
   Timer? _moodDebounce;
   String? _loadedEntryId;
   String? _loadedDateKey;
+  int _scriptureRevision = 0;
 
   @override
   void initState() {
     super.initState();
     _writingFocus = FocusNode(onKeyEvent: _handleWritingKey);
     WidgetsBinding.instance.addObserver(this);
-    Future.microtask(
-      () => ref.read(journalControllerProvider.notifier).initialize(),
-    );
+    if (widget.autoInitialize) {
+      Future.microtask(
+        () => ref.read(journalControllerProvider.notifier).initialize(),
+      );
+    }
   }
 
   KeyEventResult _handleWritingKey(FocusNode node, KeyEvent event) {
@@ -104,10 +111,16 @@ class _EditorScreenState extends ConsumerState<EditorScreen>
       content: _contentController.text,
     );
     _entryDebounce?.cancel();
-    _entryDebounce = Timer(
-      const Duration(milliseconds: 700),
-      controller.saveCurrentEntry,
-    );
+    _entryDebounce = Timer(const Duration(milliseconds: 700), () async {
+      if (!await controller.saveCurrentEntry()) return;
+      final current = ref.read(journalControllerProvider);
+      final entry = current.selectedEntry;
+      if (current.smartOrganizationEnabled && entry != null && !entry.isEmpty) {
+        await ref
+            .read(discoveryControllerProvider.notifier)
+            .organizeEntry(entry);
+      }
+    });
   }
 
   void _onGratitudeChanged(String value) {
@@ -134,6 +147,77 @@ class _EditorScreenState extends ConsumerState<EditorScreen>
     _entryDebounce?.cancel();
     await ref.read(journalControllerProvider.notifier).selectEntry(entryId);
     if (mounted) _writingFocus.requestFocus();
+  }
+
+  Future<void> _openScripture() async {
+    final compact = MediaQuery.sizeOf(context).width < 720;
+    final selection = compact
+        ? await showModalBottomSheet<ScriptureSelection>(
+            context: context,
+            isScrollControlled: true,
+            builder: (context) => SizedBox(
+              height: MediaQuery.sizeOf(context).height * .94,
+              child: const ScriptureWorkspace(),
+            ),
+          )
+        : await showGeneralDialog<ScriptureSelection>(
+            context: context,
+            barrierDismissible: true,
+            barrierLabel: 'Close Scripture',
+            barrierColor: Colors.black26,
+            transitionDuration: const Duration(milliseconds: 220),
+            pageBuilder: (context, animation, secondaryAnimation) => Align(
+              alignment: Alignment.centerRight,
+              child: Material(
+                elevation: 16,
+                child: SizedBox(
+                  width: 560,
+                  height: MediaQuery.sizeOf(context).height,
+                  child: const ScriptureWorkspace(),
+                ),
+              ),
+            ),
+          );
+    if (selection == null || !mounted) return;
+    final entry = ref.read(journalControllerProvider).selectedEntry;
+    if (entry == null) return;
+    final passage = selection.passage;
+    await ref
+        .read(databaseServiceProvider)
+        .saveScripture(
+          ScriptureReference(
+            id: const Uuid().v4(),
+            entryId: entry.id,
+            source: passage.version.isOffline ? 'bundled' : 'youversion',
+            bibleId: passage.version.id,
+            translationAbbreviation: passage.version.abbreviation,
+            passageId: passage.id,
+            reference: passage.reference,
+            copyright: passage.version.copyright,
+            cachedText: passage.version.isOffline ? passage.content : null,
+          ),
+        );
+    if (selection.insertText) {
+      final insertion =
+          '“${passage.content}”\n— ${passage.reference} (${passage.version.abbreviation})';
+      final value = _contentController.value;
+      final selectionRange = value.selection.isValid
+          ? value.selection
+          : TextSelection.collapsed(offset: value.text.length);
+      final next = value.text.replaceRange(
+        selectionRange.start,
+        selectionRange.end,
+        insertion,
+      );
+      _contentController.value = TextEditingValue(
+        text: next,
+        selection: TextSelection.collapsed(
+          offset: selectionRange.start + insertion.length,
+        ),
+      );
+      _onEntryChanged();
+    }
+    setState(() => _scriptureRevision += 1);
   }
 
   @override
@@ -164,6 +248,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen>
             titleController: _titleController,
             contentController: _contentController,
             gratitudeController: _gratitudeController,
+            scriptureRevision: _scriptureRevision,
             writingFocus: _writingFocus,
             onEntryChanged: _onEntryChanged,
             onGratitudeChanged: _onGratitudeChanged,
@@ -173,6 +258,12 @@ class _EditorScreenState extends ConsumerState<EditorScreen>
               await ref.read(journalControllerProvider.notifier).addEntry();
               if (mounted) _writingFocus.requestFocus();
             },
+            onAddQuietTime: () async {
+              _entryDebounce?.cancel();
+              await ref.read(journalControllerProvider.notifier).addQuietTime();
+              if (mounted) _writingFocus.requestFocus();
+            },
+            onOpenScripture: _openScripture,
             onFinish: () async {
               _entryDebounce?.cancel();
               _gratitudeDebounce?.cancel();
@@ -289,11 +380,14 @@ class _JournalView extends StatefulWidget {
     required this.titleController,
     required this.contentController,
     required this.gratitudeController,
+    required this.scriptureRevision,
     required this.writingFocus,
     required this.onEntryChanged,
     required this.onGratitudeChanged,
     required this.onSelectEntry,
     required this.onAddEntry,
+    required this.onAddQuietTime,
+    required this.onOpenScripture,
     required this.onFinish,
     super.key,
   });
@@ -302,11 +396,14 @@ class _JournalView extends StatefulWidget {
   final TextEditingController titleController;
   final TextEditingController contentController;
   final TextEditingController gratitudeController;
+  final int scriptureRevision;
   final FocusNode writingFocus;
   final VoidCallback onEntryChanged;
   final ValueChanged<String> onGratitudeChanged;
   final Future<void> Function(String) onSelectEntry;
   final Future<void> Function() onAddEntry;
+  final Future<void> Function() onAddQuietTime;
+  final Future<void> Function() onOpenScripture;
   final Future<void> Function() onFinish;
 
   @override
@@ -460,6 +557,15 @@ class _JournalViewState extends State<_JournalView> {
                                         ),
                                       ),
                                     ],
+                                    if (selected.purpose ==
+                                        EntryPurpose.quietTime)
+                                      _QuietTimeFields(entryId: selected.id),
+                                    if (widget.state.christianModeEnabled)
+                                      _ScriptureAttachments(
+                                        entryId: selected.id,
+                                        revision: widget.scriptureRevision,
+                                        onOpenScripture: widget.onOpenScripture,
+                                      ),
                                   ],
                                 ),
                               ),
@@ -504,6 +610,9 @@ class _JournalViewState extends State<_JournalView> {
                     writingFocus: widget.writingFocus,
                     onSelected: widget.onSelectEntry,
                     onAdd: widget.onAddEntry,
+                    onAddQuietTime: widget.onAddQuietTime,
+                    onOpenScripture: widget.onOpenScripture,
+                    christianMode: widget.state.christianModeEnabled,
                     onFinish: widget.onFinish,
                   ),
                 ),
@@ -516,6 +625,234 @@ class _JournalViewState extends State<_JournalView> {
   }
 }
 
+class _QuietTimeFields extends ConsumerStatefulWidget {
+  const _QuietTimeFields({required this.entryId});
+  final String entryId;
+
+  @override
+  ConsumerState<_QuietTimeFields> createState() => _QuietTimeFieldsState();
+}
+
+class _QuietTimeFieldsState extends ConsumerState<_QuietTimeFields> {
+  final _observation = TextEditingController();
+  final _application = TextEditingController();
+  final _prayer = TextEditingController();
+  Timer? _debounce;
+  bool _loaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(_load);
+  }
+
+  Future<void> _load() async {
+    final reflection = await ref
+        .read(databaseServiceProvider)
+        .quietTimeForEntry(widget.entryId);
+    if (!mounted) return;
+    _observation.text = reflection?.observation ?? '';
+    _application.text = reflection?.application ?? '';
+    _prayer.text = reflection?.prayer ?? '';
+    setState(() => _loaded = true);
+  }
+
+  void _changed(_) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 700), () {
+      ref
+          .read(databaseServiceProvider)
+          .saveQuietTime(
+            QuietTimeReflection(
+              entryId: widget.entryId,
+              observation: _observation.text,
+              application: _application.text,
+              prayer: _prayer.text,
+            ),
+          );
+    });
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _observation.dispose();
+    _application.dispose();
+    _prayer.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_loaded) return const LinearProgressIndicator();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 28),
+        const Divider(),
+        const SizedBox(height: 14),
+        Text(
+          'QUIET TIME',
+          style: TextStyle(
+            fontSize: 11,
+            letterSpacing: 1.05,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+        _ReflectionField(
+          label: 'Observation',
+          hint: 'What stands out in this passage?',
+          controller: _observation,
+          onChanged: _changed,
+        ),
+        _ReflectionField(
+          label: 'Application',
+          hint: 'How might this shape today?',
+          controller: _application,
+          onChanged: _changed,
+        ),
+        _ReflectionField(
+          label: 'Prayer',
+          hint: 'Respond in your own words…',
+          controller: _prayer,
+          onChanged: _changed,
+        ),
+      ],
+    );
+  }
+}
+
+class _ReflectionField extends StatelessWidget {
+  const _ReflectionField({
+    required this.label,
+    required this.hint,
+    required this.controller,
+    required this.onChanged,
+  });
+  final String label;
+  final String hint;
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: 14),
+    child: TextField(
+      controller: controller,
+      onChanged: onChanged,
+      minLines: 2,
+      maxLines: 6,
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hint,
+        border: const OutlineInputBorder(),
+      ),
+    ),
+  );
+}
+
+class _ScriptureAttachments extends ConsumerStatefulWidget {
+  const _ScriptureAttachments({
+    required this.entryId,
+    required this.revision,
+    required this.onOpenScripture,
+  });
+  final String entryId;
+  final int revision;
+  final Future<void> Function() onOpenScripture;
+
+  @override
+  ConsumerState<_ScriptureAttachments> createState() =>
+      _ScriptureAttachmentsState();
+}
+
+class _ScriptureAttachmentsState extends ConsumerState<_ScriptureAttachments> {
+  late Future<List<ScriptureReference>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ScriptureAttachments oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.entryId != widget.entryId ||
+        oldWidget.revision != widget.revision) {
+      _reload();
+    }
+  }
+
+  void _reload() {
+    _future = ref
+        .read(databaseServiceProvider)
+        .scripturesForEntry(widget.entryId);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final christianMode = ref.watch(
+      journalControllerProvider.select((state) => state.christianModeEnabled),
+    );
+    if (!christianMode) return const SizedBox.shrink();
+    return FutureBuilder<List<ScriptureReference>>(
+      future: _future,
+      builder: (context, snapshot) {
+        final references = snapshot.data ?? const [];
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (references.isNotEmpty) ...[
+              const SizedBox(height: 24),
+              for (final reference in references)
+                Card(
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.secondaryContainer.withValues(alpha: .55),
+                  child: ListTile(
+                    leading: const Icon(Icons.menu_book_outlined),
+                    title: Text(reference.reference),
+                    subtitle: Text(
+                      [
+                        if (reference.cachedText != null) reference.cachedText!,
+                        reference.translationAbbreviation,
+                        reference.copyright,
+                      ].join('\n'),
+                      maxLines: 5,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: IconButton(
+                      tooltip: 'Remove verse',
+                      onPressed: () async {
+                        await ref
+                            .read(databaseServiceProvider)
+                            .deleteScripture(reference.id);
+                        setState(_reload);
+                      },
+                      icon: const Icon(Icons.close),
+                    ),
+                  ),
+                ),
+            ],
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () async {
+                  await widget.onOpenScripture();
+                  if (mounted) setState(_reload);
+                },
+                icon: const Icon(Icons.add),
+                label: const Text('Attach Scripture'),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
 class _EntryWheel extends StatefulWidget {
   const _EntryWheel({
     required this.entries,
@@ -523,6 +860,9 @@ class _EntryWheel extends StatefulWidget {
     required this.writingFocus,
     required this.onSelected,
     required this.onAdd,
+    required this.onAddQuietTime,
+    required this.onOpenScripture,
+    required this.christianMode,
     required this.onFinish,
   });
 
@@ -531,6 +871,9 @@ class _EntryWheel extends StatefulWidget {
   final FocusNode writingFocus;
   final Future<void> Function(String) onSelected;
   final Future<void> Function() onAdd;
+  final Future<void> Function() onAddQuietTime;
+  final Future<void> Function() onOpenScripture;
+  final bool christianMode;
   final Future<void> Function() onFinish;
 
   @override
@@ -682,6 +1025,20 @@ class _EntryWheelState extends State<_EntryWheel> {
                       onPressed: widget.onAdd,
                       icon: Icons.add_rounded,
                     ),
+                    if (widget.christianMode)
+                      _CompactAction(
+                        key: const Key('new-quiet-time'),
+                        tooltip: 'New Quiet Time',
+                        onPressed: widget.onAddQuietTime,
+                        icon: Icons.church_outlined,
+                      ),
+                    if (widget.christianMode)
+                      _CompactAction(
+                        key: const Key('open-scripture'),
+                        tooltip: 'Open Scripture',
+                        onPressed: widget.onOpenScripture,
+                        icon: Icons.menu_book_outlined,
+                      ),
                     _CompactAction(
                       key: const Key('finish-journal'),
                       tooltip: 'Done for now',
