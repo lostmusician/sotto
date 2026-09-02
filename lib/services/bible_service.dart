@@ -46,7 +46,7 @@ class YouVersionBibleProvider implements BibleProvider {
 
   @override
   Future<List<BibleVersion>> versions() async {
-    final json = await _get('bibles?language_ranges=en&page_size=99');
+    final json = await _get('bibles?language_ranges%5B%5D=en&page_size=99');
     final versions = (json['data'] as List<dynamic>? ?? const [])
         .cast<Map<String, dynamic>>()
         .map(
@@ -151,14 +151,31 @@ class YouVersionBibleProvider implements BibleProvider {
       );
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
+      final detail = _responseDetail(response.body);
       throw http.ClientException(
-        'YouVersion request failed (${response.statusCode}).',
+        'YouVersion request failed (${response.statusCode})'
+        '${detail.isEmpty ? '.' : ': $detail'}',
+        response.request?.url,
       );
     }
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
   void close() => _client.close();
+
+  String _responseDetail(String body) {
+    final trimmed = body.trim();
+    if (trimmed.isEmpty) return '';
+    try {
+      final decoded = jsonDecode(trimmed);
+      if (decoded case {'message': final Object message}) return '$message';
+      if (decoded case {'detail': final Object detail}) return '$detail';
+      if (decoded case {'error': final Object error}) return '$error';
+    } catch (_) {
+      // Fall through to a bounded plain-text response.
+    }
+    return trimmed.length <= 240 ? trimmed : '${trimmed.substring(0, 240)}…';
+  }
 }
 
 class BibleRateLimitException implements Exception {

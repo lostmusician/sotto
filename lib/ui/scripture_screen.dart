@@ -196,145 +196,159 @@ class _ScriptureWorkspaceState extends ConsumerState<ScriptureWorkspace> {
       ),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
-            child: Column(
+          if (_loading) const LinearProgressIndicator(),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.only(bottom: 20),
               children: [
-                DropdownButtonFormField<BibleVersion>(
-                  initialValue: _version,
-                  isExpanded: true,
-                  decoration: const InputDecoration(labelText: 'Translation'),
-                  items: [
-                    for (final version in _versions)
-                      DropdownMenuItem(
-                        value: version,
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+                  child: Column(
+                    children: [
+                      DropdownButtonFormField<BibleVersion>(
+                        initialValue: _version,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Translation',
+                        ),
+                        items: [
+                          for (final version in _versions)
+                            DropdownMenuItem(
+                              value: version,
+                              child: Text(
+                                '${version.abbreviation} · ${version.title}',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                        ],
+                        onChanged: (value) {
+                          if (value != null) _changeVersion(value);
+                        },
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            flex: 2,
+                            child: DropdownButtonFormField<BibleBook>(
+                              initialValue: _book,
+                              isExpanded: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Book',
+                              ),
+                              items: [
+                                for (final book in _books)
+                                  DropdownMenuItem(
+                                    value: book,
+                                    child: Text(
+                                      book.name,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                              ],
+                              onChanged: (value) {
+                                if (value != null) _changeBook(value);
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: DropdownButtonFormField<int>(
+                              initialValue: _chapter,
+                              decoration: const InputDecoration(
+                                labelText: 'Chapter',
+                              ),
+                              items: [
+                                for (final chapter in _chapters)
+                                  DropdownMenuItem(
+                                    value: chapter,
+                                    child: Text('$chapter'),
+                                  ),
+                              ],
+                              onChanged: (value) {
+                                if (value == null) return;
+                                setState(() => _chapter = value);
+                                _loadChapter();
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Align(
+                        alignment: Alignment.centerLeft,
                         child: Text(
-                          '${version.abbreviation} · ${version.title}',
-                          overflow: TextOverflow.ellipsis,
+                          'Available translations depend on the licenses approved for this app.',
+                          style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ),
-                  ],
-                  onChanged: (value) {
-                    if (value != null) _changeVersion(value);
-                  },
+                    ],
+                  ),
                 ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      flex: 2,
-                      child: DropdownButtonFormField<BibleBook>(
-                        initialValue: _book,
-                        decoration: const InputDecoration(labelText: 'Book'),
-                        items: [
-                          for (final book in _books)
-                            DropdownMenuItem(
-                              value: book,
-                              child: Text(book.name),
-                            ),
-                        ],
-                        onChanged: (value) {
-                          if (value != null) _changeBook(value);
-                        },
-                      ),
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: SelectableText(
+                      'Scripture could not be loaded: $_error',
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: DropdownButtonFormField<int>(
-                        initialValue: _chapter,
-                        decoration: const InputDecoration(labelText: 'Chapter'),
-                        items: [
-                          for (final chapter in _chapters)
-                            DropdownMenuItem(
-                              value: chapter,
-                              child: Text('$chapter'),
-                            ),
-                        ],
-                        onChanged: (value) {
-                          if (value == null) return;
-                          setState(() => _chapter = value);
-                          _loadChapter();
-                        },
-                      ),
+                  ),
+                for (final passage in _results)
+                  Card(
+                    margin: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 4,
                     ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerLeft,
+                    color: _selected?.id == passage.id
+                        ? Theme.of(context).colorScheme.primaryContainer
+                        : null,
+                    child: ListTile(
+                      selected: _selected?.id == passage.id,
+                      title: Text(passage.reference),
+                      subtitle: Text(
+                        passage.content,
+                        style: const TextStyle(
+                          fontFamily: 'Georgia',
+                          height: 1.4,
+                        ),
+                      ),
+                      onTap: () => setState(() => _selected = passage),
+                    ),
+                  ),
+                if (_selected != null)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.pop(
+                              context,
+                              ScriptureSelection(_selected!, insertText: false),
+                            ),
+                            child: const Text('Attach verse'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: FilledButton(
+                            onPressed: () => Navigator.pop(
+                              context,
+                              ScriptureSelection(_selected!, insertText: true),
+                            ),
+                            child: const Text('Attach & insert'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
                   child: Text(
-                    'Available translations depend on the licenses approved for this app.',
+                    _version.copyright,
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
               ],
-            ),
-          ),
-          if (_loading) const LinearProgressIndicator(),
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text('Scripture could not be loaded: $_error'),
-            ),
-          Expanded(
-            child: ListView.builder(
-              padding: const EdgeInsets.fromLTRB(14, 4, 14, 20),
-              itemCount: _results.length,
-              itemBuilder: (context, index) {
-                final passage = _results[index];
-                final selected = _selected?.id == passage.id;
-                return Card(
-                  color: selected
-                      ? Theme.of(context).colorScheme.primaryContainer
-                      : null,
-                  child: ListTile(
-                    selected: selected,
-                    title: Text(passage.reference),
-                    subtitle: Text(
-                      passage.content,
-                      style: const TextStyle(
-                        fontFamily: 'Georgia',
-                        height: 1.4,
-                      ),
-                    ),
-                    onTap: () => setState(() => _selected = passage),
-                  ),
-                );
-              },
-            ),
-          ),
-          if (_selected != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(
-                        context,
-                        ScriptureSelection(_selected!, insertText: false),
-                      ),
-                      child: const Text('Attach verse'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: () => Navigator.pop(
-                        context,
-                        ScriptureSelection(_selected!, insertText: true),
-                      ),
-                      child: const Text('Attach & insert'),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-            child: Text(
-              _version.copyright,
-              style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
         ],

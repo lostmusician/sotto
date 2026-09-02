@@ -771,53 +771,73 @@ class _BinderSheet extends ConsumerWidget {
               const SizedBox(height: 18),
               if (zoom == BinderZoom.days) ...[
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final veryShort = constraints.maxHeight < 150;
+                      final short = constraints.maxHeight < 420;
+                      final excerptWidget = Text(
                         excerpt.isEmpty ? 'A quiet page.' : excerpt,
-                        maxLines: 8,
+                        maxLines: veryShort
+                            ? 2
+                            : short
+                            ? 4
+                            : 8,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           fontFamily: 'Georgia',
                           fontSize: 21,
                           height: 1.5,
                         ),
-                      ),
-                      if (primary.day.gratitude.trim().isNotEmpty) ...[
-                        const SizedBox(height: 26),
-                        const Text(
-                          'GRATEFUL FOR',
-                          style: TextStyle(fontSize: 11, letterSpacing: 1.1),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          primary.day.gratitude,
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontStyle: FontStyle.italic),
-                        ),
-                      ],
-                      if (additionalCount > 0) ...[
-                        const SizedBox(height: 24),
-                        Text(
-                          '$additionalCount additional ${additionalCount == 1 ? 'entry' : 'entries'}',
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          primary.additionalEntries
-                              .map((entry) => _entryTime(entry.createdAt))
-                              .join('  ·  '),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                    ],
+                      );
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (short)
+                            Expanded(child: excerptWidget)
+                          else
+                            excerptWidget,
+                          if (!veryShort &&
+                              primary.day.gratitude.trim().isNotEmpty) ...[
+                            SizedBox(height: short ? 16 : 26),
+                            const Text(
+                              'GRATEFUL FOR',
+                              style: TextStyle(
+                                fontSize: 11,
+                                letterSpacing: 1.1,
+                              ),
+                            ),
+                            SizedBox(height: short ? 4 : 8),
+                            Text(
+                              primary.day.gratitude,
+                              maxLines: short ? 1 : 3,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          ],
+                          if (!short && additionalCount > 0) ...[
+                            const SizedBox(height: 24),
+                            Text(
+                              '$additionalCount additional ${additionalCount == 1 ? 'entry' : 'entries'}',
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              primary.additionalEntries
+                                  .map((entry) => _entryTime(entry.createdAt))
+                                  .join('  ·  '),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ],
+                      );
+                    },
                   ),
                 ),
                 const SizedBox(height: 18),

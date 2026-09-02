@@ -6,6 +6,7 @@ import 'package:sotto/providers/journal_providers.dart';
 import 'package:sotto/services/bible_service.dart';
 import 'package:sotto/services/database_service.dart';
 import 'package:sotto/ui/editor_screen.dart';
+import 'package:sotto/ui/scripture_screen.dart';
 
 import 'support/session_test_doubles.dart';
 
@@ -77,6 +78,61 @@ void main() {
       expect(find.text('Genesis 1:1'), findsOneWidget);
     },
   );
+
+  testWidgets('Scripture workspace scrolls in a short desktop window', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(800, 320);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+
+    final container = ProviderContainer(
+      overrides: [
+        youVersionBibleProvider.overrideWithValue(_FixtureBibleProvider()),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: ScriptureWorkspace()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('NIV · New International Version'), findsOneWidget);
+  });
+
+  testWidgets('desktop phases avoid bottom overflow in a short window', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(900, 360);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+
+    final harness = await _pumpCompletedApp(tester, christianMode: true);
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.byKey(const Key('binder-settings')));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    Navigator.of(tester.element(find.text('Sotto settings'))).pop();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('edit-journal')));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+
+    await harness.container
+        .read(journalControllerProvider.notifier)
+        .openMood('2026-09-01');
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
 }
 
 Future<_Harness> _pumpCompletedApp(

@@ -17,10 +17,12 @@ void main() {
     });
 
     test('offers only ESV, NIV, ERV, and NKJV in product order', () async {
+      Uri? requestedUri;
       final provider = YouVersionBibleProvider(
         appKey: 'fixture',
-        client: MockClient(
-          (_) async => http.Response(
+        client: MockClient((request) async {
+          requestedUri = request.url;
+          return http.Response(
             jsonEncode({
               'data': [
                 _versionJson(114, 'NKJV', 'New King James Version'),
@@ -31,8 +33,8 @@ void main() {
               ],
             }),
             200,
-          ),
-        ),
+          );
+        }),
       );
       addTearDown(provider.close);
 
@@ -45,6 +47,30 @@ void main() {
         'NKJV',
       ]);
       expect(versions.every((version) => !version.isOffline), isTrue);
+      expect(requestedUri?.queryParametersAll['language_ranges[]'], ['en']);
+      expect(requestedUri?.queryParameters, isNot(contains('language_ranges')));
+    });
+
+    test('includes API validation details in request errors', () async {
+      final provider = YouVersionBibleProvider(
+        appKey: 'fixture',
+        client: MockClient(
+          (_) async =>
+              http.Response('{"message":"language_ranges[] is required"}', 422),
+        ),
+      );
+      addTearDown(provider.close);
+
+      expect(
+        provider.versions,
+        throwsA(
+          isA<http.ClientException>().having(
+            (error) => error.message,
+            'message',
+            contains('language_ranges[] is required'),
+          ),
+        ),
+      );
     });
 
     test('surfaces Retry-After and preserves attribution metadata', () async {
