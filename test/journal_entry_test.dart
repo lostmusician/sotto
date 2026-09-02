@@ -2,17 +2,20 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sotto/models/journal_entry.dart';
 
 void main() {
-  test('word count ignores surrounding and repeated whitespace', () {
-    final entry = JournalEntry.empty().copyWith(
-      content: '  The quiet   room\nheld five words. ',
-    );
-    expect(entry.wordCount, 6);
+  test('day entry counts words and identifies empty content', () {
+    final entry = DayEntry.empty(
+      dateKey: '2026-09-01',
+      type: DayEntryType.additional,
+    ).copyWith(content: '  one   two\nthree  ');
+
+    expect(entry.wordCount, 3);
+    expect(entry.isEmpty, isFalse);
   });
 
-  test('progress is capped at one', () {
-    final entry = JournalEntry.empty().copyWith(
-      content: List.filled(600, 'word').join(' '),
-    );
-    expect(entry.progress, 1);
+  test('evening preference switches at the configured local minute', () {
+    const preference = EveningPreference(minutesAfterMidnight: 18 * 60);
+
+    expect(preference.isEvening(DateTime(2026, 9, 1, 17, 59)), isFalse);
+    expect(preference.isEvening(DateTime(2026, 9, 1, 18)), isTrue);
   });
 }

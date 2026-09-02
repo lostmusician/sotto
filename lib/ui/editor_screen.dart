@@ -1,286 +1,878 @@
 import 'dart:async';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/journal_entry.dart';
 import '../providers/journal_providers.dart';
-import 'pixel_scene.dart';
+import 'binder_screen.dart';
+import 'mood_dial.dart';
 
 class EditorScreen extends ConsumerStatefulWidget {
   const EditorScreen({super.key});
+
   @override
   ConsumerState<EditorScreen> createState() => _EditorScreenState();
 }
 
-class _EditorScreenState extends ConsumerState<EditorScreen> {
-  final _textController = TextEditingController();
-  final _focusNode = FocusNode();
-  Timer? _saveDebounce;
-  Timer? _reflectionDebounce;
+class _EditorScreenState extends ConsumerState<EditorScreen>
+    with WidgetsBindingObserver {
+  final _titleController = TextEditingController();
+  final _contentController = TextEditingController();
+  final _gratitudeController = TextEditingController();
+  late final FocusNode _writingFocus;
+  Timer? _entryDebounce;
+  Timer? _gratitudeDebounce;
+  Timer? _moodDebounce;
   String? _loadedEntryId;
+  String? _loadedDateKey;
 
   @override
   void initState() {
     super.initState();
-    Future.microtask(() {
-      ref.read(journalControllerProvider.notifier).initialize();
-      _focusNode.requestFocus();
-    });
+    _writingFocus = FocusNode(onKeyEvent: _handleWritingKey);
+    WidgetsBinding.instance.addObserver(this);
+    Future.microtask(
+      () => ref.read(journalControllerProvider.notifier).initialize(),
+    );
+  }
+
+  KeyEventResult _handleWritingKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent || !HardwareKeyboard.instance.isAltPressed) {
+      return KeyEventResult.ignored;
+    }
+    final delta = switch (event.logicalKey) {
+      LogicalKeyboardKey.arrowUp => -1,
+      LogicalKeyboardKey.arrowDown => 1,
+      _ => 0,
+    };
+    if (delta == 0) return KeyEventResult.ignored;
+    final state = ref.read(journalControllerProvider);
+    final index = state.entries.indexWhere(
+      (entry) => entry.id == state.selectedEntryId,
+    );
+    final next = (index + delta).clamp(0, state.entries.length - 1);
+    if (next != index) unawaited(_selectEntry(state.entries[next].id));
+    return KeyEventResult.handled;
   }
 
   @override
   void dispose() {
-    _saveDebounce?.cancel();
-    _reflectionDebounce?.cancel();
-    _textController.dispose();
-    _focusNode.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    _entryDebounce?.cancel();
+    _gratitudeDebounce?.cancel();
+    _moodDebounce?.cancel();
+    _titleController.dispose();
+    _contentController.dispose();
+    _gratitudeController.dispose();
+    _writingFocus.dispose();
     super.dispose();
   }
 
-  void _onChanged(String value) {
-    ref.read(journalControllerProvider.notifier).updateContent(value);
-    _saveDebounce?.cancel();
-    _saveDebounce = Timer(
-      const Duration(milliseconds: 700),
-      ref.read(journalControllerProvider.notifier).save,
-    );
-    _reflectionDebounce?.cancel();
-    if (value.trim().split(RegExp(r'\s+')).length >= 8) {
-      _reflectionDebounce = Timer(const Duration(seconds: 10), _reflect);
-    }
-  }
-
-  Future<void> _reflect() async {
-    final state = ref.read(journalControllerProvider);
-    final excerpt = _lastWords(state.entry.content, 150);
-    if (excerpt.isEmpty || ref.read(aiTypingProvider)) return;
-    ref.read(aiTypingProvider.notifier).state = true;
-    try {
-      final result = await ref.read(aiServiceProvider).reflectOn(excerpt);
-      if (mounted) {
-        await ref
-            .read(journalControllerProvider.notifier)
-            .addReflection(result);
-      }
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('The companion could not reflect: $error')),
-        );
-      }
-    } finally {
-      if (mounted) {
-        ref.read(aiTypingProvider.notifier).state = false;
-      }
-    }
-  }
-
-  String _lastWords(String text, int count) {
-    final words = text.trim().split(RegExp(r'\s+'));
-    return words.length <= count
-        ? text.trim()
-        : words.sublist(words.length - count).join(' ');
-  }
-
   @override
-  Widget build(BuildContext context) {
-    final session = ref.watch(journalControllerProvider);
-    final entry = session.entry;
-    final wordCount = ref.watch(activeWordCountProvider);
-    final isThinking = ref.watch(aiTypingProvider);
-    if (_loadedEntryId != entry.id) {
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    final current = ref.read(journalControllerProvider);
+    if (current.phase == AppPhase.binder) {
+      ref.read(journalControllerProvider.notifier).initialize();
+    }
+  }
+
+  void _syncControllers(JournalAppState state) {
+    final entry = state.selectedEntry;
+    if (entry != null && _loadedEntryId != entry.id) {
       _loadedEntryId = entry.id;
-      _textController.value = TextEditingValue(
+      _titleController.text = entry.title;
+      _contentController.value = TextEditingValue(
         text: entry.content,
         selection: TextSelection.collapsed(offset: entry.content.length),
       );
     }
+    if (state.day != null && _loadedDateKey != state.day!.dateKey) {
+      _loadedDateKey = state.day!.dateKey;
+      _gratitudeController.text = state.day!.gratitude;
+    }
+  }
 
-    return Scaffold(
-      body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final editor = _EditorPane(
-              controller: _textController,
-              focusNode: _focusNode,
-              onChanged: _onChanged,
-              isLoading: session.isLoading,
-            );
-            final companion = _CompanionPane(
-              wordCount: wordCount,
-              targetWordCount: entry.targetWordCount,
-              isThinking: isThinking,
-              annotation: entry.annotations.lastOrNull?.question,
-              isDemo: session.lastReflectionWasDemo,
-            );
-            if (constraints.maxWidth < 900) {
-              return Column(
-                children: [
-                  SizedBox(height: 260, child: companion),
-                  Expanded(child: editor),
-                ],
-              );
-            }
-            return Row(
-              children: [
-                Expanded(flex: 66, child: editor),
-                Expanded(flex: 34, child: companion),
-              ],
-            );
-          },
+  void _onEntryChanged() {
+    final controller = ref.read(journalControllerProvider.notifier);
+    controller.updateEntry(
+      title: _titleController.text,
+      content: _contentController.text,
+    );
+    _entryDebounce?.cancel();
+    _entryDebounce = Timer(
+      const Duration(milliseconds: 700),
+      controller.saveCurrentEntry,
+    );
+  }
+
+  void _onGratitudeChanged(String value) {
+    final controller = ref.read(journalControllerProvider.notifier);
+    controller.updateGratitude(value);
+    _gratitudeDebounce?.cancel();
+    _gratitudeDebounce = Timer(
+      const Duration(milliseconds: 700),
+      controller.saveGratitude,
+    );
+  }
+
+  void _onMoodChanged(double angle, double intensity) {
+    final controller = ref.read(journalControllerProvider.notifier);
+    controller.updateMood(angle, intensity);
+    _moodDebounce?.cancel();
+    _moodDebounce = Timer(
+      const Duration(milliseconds: 700),
+      controller.saveMood,
+    );
+  }
+
+  Future<void> _selectEntry(String entryId) async {
+    _entryDebounce?.cancel();
+    await ref.read(journalControllerProvider.notifier).selectEntry(entryId);
+    if (mounted) _writingFocus.requestFocus();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = ref.watch(journalControllerProvider);
+    _syncControllers(state);
+    return Material(
+      color: Colors.transparent,
+      child: AnimatedSwitcher(
+        duration: MediaQuery.disableAnimationsOf(context)
+            ? Duration.zero
+            : const Duration(milliseconds: 320),
+        child: switch (state.phase) {
+          AppPhase.loading => const _LoadingView(key: ValueKey('loading')),
+          AppPhase.mood => _MoodView(
+            key: const ValueKey('mood'),
+            state: state,
+            onChanged: _onMoodChanged,
+            onFinish: () async {
+              _moodDebounce?.cancel();
+              await ref.read(journalControllerProvider.notifier).finishMood();
+            },
+            onBinder: ref.read(journalControllerProvider.notifier).openBinder,
+          ),
+          AppPhase.journal => _JournalView(
+            key: const ValueKey('journal'),
+            state: state,
+            titleController: _titleController,
+            contentController: _contentController,
+            gratitudeController: _gratitudeController,
+            writingFocus: _writingFocus,
+            onEntryChanged: _onEntryChanged,
+            onGratitudeChanged: _onGratitudeChanged,
+            onSelectEntry: _selectEntry,
+            onAddEntry: () async {
+              _entryDebounce?.cancel();
+              await ref.read(journalControllerProvider.notifier).addEntry();
+              if (mounted) _writingFocus.requestFocus();
+            },
+            onFinish: () async {
+              _entryDebounce?.cancel();
+              _gratitudeDebounce?.cancel();
+              await ref
+                  .read(journalControllerProvider.notifier)
+                  .finishEditing();
+            },
+          ),
+          AppPhase.binder => const BinderScreen(key: ValueKey('binder')),
+        },
+      ),
+    );
+  }
+}
+
+class _LoadingView extends StatelessWidget {
+  const _LoadingView({super.key});
+
+  @override
+  Widget build(BuildContext context) => const ColoredBox(
+    color: Color(0xFFF4F0E8),
+    child: Center(child: CircularProgressIndicator()),
+  );
+}
+
+class _MoodView extends StatelessWidget {
+  const _MoodView({
+    required this.state,
+    required this.onChanged,
+    required this.onFinish,
+    required this.onBinder,
+    super.key,
+  });
+
+  final JournalAppState state;
+  final void Function(double, double) onChanged;
+  final Future<void> Function() onFinish;
+  final Future<void> Function() onBinder;
+
+  @override
+  Widget build(BuildContext context) {
+    final angle = state.checkIn?.moodAngle ?? .12;
+    final intensity = state.checkIn?.moodIntensity ?? .55;
+    final accent = MoodPalette.colorFor(angle, intensity);
+    return ColoredBox(
+      color: Color.lerp(const Color(0xFFF4F0E8), accent, .18)!,
+      child: SafeArea(
+        child: Stack(
+          children: [
+            Positioned(
+              top: 12,
+              left: 14,
+              child: IconButton(
+                key: const Key('mood-binder'),
+                tooltip: 'Open binder',
+                onPressed: onBinder,
+                icon: const Icon(Icons.menu_book_outlined),
+              ),
+            ),
+            Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(28),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 620),
+                  child: Column(
+                    children: [
+                      Text(
+                        _friendlyDate(state.selectedDateKey),
+                        style: const TextStyle(fontSize: 13, letterSpacing: 1),
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'How did today feel?',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontFamily: 'Georgia',
+                          fontSize: 38,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 28),
+                      MoodDial(
+                        angle: angle,
+                        intensity: intensity,
+                        onChanged: onChanged,
+                      ),
+                      const SizedBox(height: 24),
+                      FilledButton(
+                        key: const Key('finish-mood'),
+                        onPressed: onFinish,
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 28,
+                            vertical: 16,
+                          ),
+                        ),
+                        child: const Text('Save mood'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 }
 
-class _EditorPane extends StatelessWidget {
-  const _EditorPane({
-    required this.controller,
-    required this.focusNode,
-    required this.onChanged,
-    required this.isLoading,
+class _JournalView extends StatefulWidget {
+  const _JournalView({
+    required this.state,
+    required this.titleController,
+    required this.contentController,
+    required this.gratitudeController,
+    required this.writingFocus,
+    required this.onEntryChanged,
+    required this.onGratitudeChanged,
+    required this.onSelectEntry,
+    required this.onAddEntry,
+    required this.onFinish,
+    super.key,
   });
-  final TextEditingController controller;
-  final FocusNode focusNode;
-  final ValueChanged<String> onChanged;
-  final bool isLoading;
+
+  final JournalAppState state;
+  final TextEditingController titleController;
+  final TextEditingController contentController;
+  final TextEditingController gratitudeController;
+  final FocusNode writingFocus;
+  final VoidCallback onEntryChanged;
+  final ValueChanged<String> onGratitudeChanged;
+  final Future<void> Function(String) onSelectEntry;
+  final Future<void> Function() onAddEntry;
+  final Future<void> Function() onFinish;
+
+  @override
+  State<_JournalView> createState() => _JournalViewState();
+}
+
+class _JournalViewState extends State<_JournalView> {
+  void _moveSelection(int delta) {
+    final index = widget.state.entries.indexWhere(
+      (entry) => entry.id == widget.state.selectedEntryId,
+    );
+    final next = (index + delta).clamp(0, widget.state.entries.length - 1);
+    if (next != index) {
+      unawaited(widget.onSelectEntry(widget.state.entries[next].id));
+    }
+  }
+
+  void _resumeWriting() => widget.writingFocus.requestFocus();
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFFFEFDF9),
-        border: Border.all(color: const Color(0xFFD8D8D2)),
-      ),
-      child: Stack(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(28, 96, 28, 40),
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 760),
-                child: TextField(
-                  controller: controller,
-                  focusNode: focusNode,
-                  onChanged: onChanged,
-                  maxLines: null,
-                  expands: true,
-                  textAlignVertical: TextAlignVertical.top,
-                  cursorColor: const Color(0xFF24271F),
-                  keyboardType: TextInputType.multiline,
-                  style: const TextStyle(
-                    fontFamily: 'Georgia',
-                    fontSize: 29,
-                    height: 1.48,
-                    letterSpacing: -.35,
-                    color: Color(0xFF23251F),
-                  ),
-                  decoration: const InputDecoration(
-                    border: InputBorder.none,
-                    hintText: 'Begin with what is true…',
-                    hintStyle: TextStyle(color: Color(0xFFB1B1AA)),
+    final selected = widget.state.selectedEntry;
+    if (selected == null) return const _LoadingView();
+    final viewportWidth = MediaQuery.sizeOf(context).width;
+    final compact = viewportWidth < 600;
+    final wheelOverlapsWritingColumn = viewportWidth < 1380;
+    final pagePadding = compact ? 20.0 : 48.0;
+    final shortcuts = <ShortcutActivator, VoidCallback>{
+      const SingleActivator(LogicalKeyboardKey.arrowUp, alt: true): () =>
+          _moveSelection(-1),
+      const SingleActivator(LogicalKeyboardKey.arrowDown, alt: true): () =>
+          _moveSelection(1),
+    };
+    final duration = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 180);
+
+    return CallbackShortcuts(
+      bindings: shortcuts,
+      child: Focus(
+        autofocus: true,
+        child: ColoredBox(
+          key: const Key('full-page-journal'),
+          color: const Color(0xFFFFFCF5),
+          child: SafeArea(
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) => AnimatedSwitcher(
+                      duration: duration,
+                      transitionBuilder: (child, animation) => FadeTransition(
+                        opacity: animation,
+                        child: SlideTransition(
+                          position: Tween<Offset>(
+                            begin: const Offset(0, .018),
+                            end: Offset.zero,
+                          ).animate(animation),
+                          child: child,
+                        ),
+                      ),
+                      child: SingleChildScrollView(
+                        key: ValueKey(selected.id),
+                        padding: EdgeInsets.fromLTRB(
+                          pagePadding,
+                          wheelOverlapsWritingColumn ? 176 : 82,
+                          pagePadding,
+                          48,
+                        ),
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            minHeight: math.max(0, constraints.maxHeight - 130),
+                          ),
+                          child: Align(
+                            alignment: Alignment.topCenter,
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 780),
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.translucent,
+                                onTap: _resumeWriting,
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    TextField(
+                                      key: const Key('entry-title'),
+                                      controller: widget.titleController,
+                                      onTap: _resumeWriting,
+                                      onChanged: (_) => widget.onEntryChanged(),
+                                      decoration: InputDecoration(
+                                        border: InputBorder.none,
+                                        hintText:
+                                            selected.type == DayEntryType.daily
+                                            ? 'Daily journal'
+                                            : _entryTime(selected),
+                                      ),
+                                      style: const TextStyle(
+                                        fontFamily: 'Georgia',
+                                        fontSize: 19,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    const Divider(),
+                                    TextField(
+                                      key: const Key('journal-editor'),
+                                      controller: widget.contentController,
+                                      focusNode: widget.writingFocus,
+                                      autofocus: true,
+                                      onTap: _resumeWriting,
+                                      onChanged: (_) => widget.onEntryChanged(),
+                                      // Keep the gratitude footer in the initial
+                                      // viewport, then let this field expand with
+                                      // the journal as the user writes.
+                                      minLines: compact ? 6 : 5,
+                                      maxLines: null,
+                                      keyboardType: TextInputType.multiline,
+                                      decoration: const InputDecoration(
+                                        border: InputBorder.none,
+                                        hintText: 'Start where you are…',
+                                      ),
+                                      style: const TextStyle(
+                                        fontFamily: 'Georgia',
+                                        fontSize: 24,
+                                        height: 1.55,
+                                      ),
+                                    ),
+                                    if (selected.type ==
+                                        DayEntryType.daily) ...[
+                                      const SizedBox(height: 42),
+                                      const Divider(),
+                                      const SizedBox(height: 18),
+                                      Text(
+                                        'WHAT ARE YOU GRATEFUL FOR TODAY?',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          letterSpacing: 1.05,
+                                          color: Theme.of(
+                                            context,
+                                          ).colorScheme.onSurfaceVariant,
+                                        ),
+                                      ),
+                                      TextField(
+                                        key: const Key('gratitude-editor'),
+                                        controller: widget.gratitudeController,
+                                        onChanged: widget.onGratitudeChanged,
+                                        minLines: 2,
+                                        maxLines: 5,
+                                        decoration: const InputDecoration(
+                                          border: InputBorder.none,
+                                          hintText: 'A small thing is enough…',
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-              ),
+                Positioned(
+                  left: compact ? 14 : 22,
+                  top: 14,
+                  child: AnimatedBuilder(
+                    animation: widget.writingFocus,
+                    builder: (context, child) => AnimatedOpacity(
+                      duration: duration,
+                      opacity: widget.writingFocus.hasFocus
+                          ? compact
+                                ? .68
+                                : .34
+                          : .82,
+                      child: child,
+                    ),
+                    child: Text(
+                      _friendlyDate(widget.state.selectedDateKey),
+                      key: const Key('floating-journal-date'),
+                      style: const TextStyle(
+                        fontFamily: 'Georgia',
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: compact ? 8 : 16,
+                  top: 8,
+                  child: _EntryWheel(
+                    entries: widget.state.entries,
+                    selectedEntryId: selected.id,
+                    writingFocus: widget.writingFocus,
+                    onSelected: widget.onSelectEntry,
+                    onAdd: widget.onAddEntry,
+                    onFinish: widget.onFinish,
+                  ),
+                ),
+              ],
             ),
           ),
-          if (isLoading)
-            const Positioned(
-              top: 24,
-              left: 24,
-              child: SizedBox.square(
-                dimension: 16,
-                child: CircularProgressIndicator(strokeWidth: 1.5),
-              ),
-            ),
-        ],
+        ),
       ),
     );
   }
 }
 
-class _CompanionPane extends StatelessWidget {
-  const _CompanionPane({
-    required this.wordCount,
-    required this.targetWordCount,
-    required this.isThinking,
-    required this.annotation,
-    required this.isDemo,
+class _EntryWheel extends StatefulWidget {
+  const _EntryWheel({
+    required this.entries,
+    required this.selectedEntryId,
+    required this.writingFocus,
+    required this.onSelected,
+    required this.onAdd,
+    required this.onFinish,
   });
-  final int wordCount;
-  final int targetWordCount;
-  final bool isThinking;
-  final String? annotation;
-  final bool isDemo;
+
+  final List<DayEntry> entries;
+  final String selectedEntryId;
+  final FocusNode writingFocus;
+  final Future<void> Function(String) onSelected;
+  final Future<void> Function() onAdd;
+  final Future<void> Function() onFinish;
+
+  @override
+  State<_EntryWheel> createState() => _EntryWheelState();
+}
+
+class _EntryWheelState extends State<_EntryWheel> {
+  static const _itemExtent = 42.0;
+
+  late FixedExtentScrollController _scrollController;
+  bool _hovering = false;
+  late int _visualIndex;
+  bool _selectionInFlight = false;
+  int? _queuedSelection;
+
+  int get _selectedIndex {
+    final index = widget.entries.indexWhere(
+      (entry) => entry.id == widget.selectedEntryId,
+    );
+    return index < 0 ? 0 : index;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _visualIndex = _selectedIndex;
+    _scrollController = FixedExtentScrollController(initialItem: _visualIndex);
+  }
+
+  @override
+  void didUpdateWidget(covariant _EntryWheel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final selectedIndex = _selectedIndex.clamp(0, widget.entries.length - 1);
+    if (selectedIndex == _visualIndex &&
+        oldWidget.entries.length == widget.entries.length) {
+      return;
+    }
+    _visualIndex = selectedIndex;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      if (_scrollController.selectedItem != selectedIndex) {
+        _scrollController.jumpToItem(selectedIndex);
+      }
+      setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _commitVisualSelection() async {
+    final index = _visualIndex.clamp(0, widget.entries.length - 1);
+    if (widget.entries[index].id == widget.selectedEntryId) return;
+    if (_selectionInFlight) {
+      _queuedSelection = index;
+      return;
+    }
+    _selectionInFlight = true;
+    await widget.onSelected(widget.entries[index].id);
+    if (!mounted) return;
+    _selectionInFlight = false;
+    final queued = _queuedSelection;
+    _queuedSelection = null;
+    if (queued != null && queued != index) {
+      _visualIndex = queued.clamp(0, widget.entries.length - 1);
+      await _commitVisualSelection();
+    }
+  }
+
+  Future<void> _moveTo(int index) async {
+    final target = index.clamp(0, widget.entries.length - 1);
+    if (target == _visualIndex) return;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    if (reduceMotion) {
+      _scrollController.jumpToItem(target);
+      setState(() => _visualIndex = target);
+    } else {
+      await _scrollController.animateToItem(
+        target,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+      );
+    }
+    await _commitVisualSelection();
+  }
+
+  Key? _positionKey(int index) {
+    if (index == _visualIndex) return const Key('entry-wheel-center');
+    if (index == _visualIndex - 1) return const Key('entry-wheel-previous');
+    if (index == _visualIndex + 1) return const Key('entry-wheel-next');
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: const Color(0xFFF5F6F7),
-      padding: const EdgeInsets.all(24),
-      child: Align(
-        alignment: Alignment.topCenter,
-        child: SingleChildScrollView(
+    final safeIndex = _selectedIndex;
+    final selected = widget.entries[safeIndex];
+    final compact = MediaQuery.sizeOf(context).width < 600;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final highContrast = MediaQuery.highContrastOf(context);
+    final duration = reduceMotion
+        ? Duration.zero
+        : const Duration(milliseconds: 180);
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovering = true),
+      onExit: (_) => setState(() => _hovering = false),
+      child: AnimatedBuilder(
+        animation: widget.writingFocus,
+        builder: (context, child) {
+          final faded = widget.writingFocus.hasFocus && !_hovering;
+          return AnimatedOpacity(
+            duration: duration,
+            opacity: highContrast
+                ? 1
+                : faded
+                ? compact
+                      ? .72
+                      : .34
+                : 1,
+            child: child,
+          );
+        },
+        child: SizedBox(
+          key: const Key('entry-wheel-panel'),
+          width: compact ? 220 : 284,
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 480),
-                child: PixelScene(
-                  wordCount: wordCount,
-                  targetWordCount: targetWordCount,
-                  isThinking: isThinking,
-                ),
-              ),
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 350),
-                child: isThinking
-                    ? const Padding(
-                        key: ValueKey('thinking'),
-                        padding: EdgeInsets.only(top: 24),
+              SizedBox(
+                height: 40,
+                child: Row(
+                  children: [
+                    const Expanded(
+                      child: Padding(
+                        padding: EdgeInsets.only(left: 12),
                         child: Text(
-                          'Your companion is thinking…',
-                          style: TextStyle(fontStyle: FontStyle.italic),
-                        ),
-                      )
-                    : annotation == null
-                    ? const SizedBox.shrink(key: ValueKey('empty'))
-                    : Container(
-                        key: ValueKey(annotation),
-                        margin: const EdgeInsets.only(top: 24),
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFEFDF9),
-                          border: Border.all(color: const Color(0xFFC9CDC5)),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              annotation!,
-                              style: const TextStyle(
-                                fontFamily: 'Georgia',
-                                fontSize: 19,
-                                height: 1.35,
-                                fontStyle: FontStyle.italic,
-                              ),
-                            ),
-                            if (isDemo) ...[
-                              const SizedBox(height: 10),
-                              const Text(
-                                'DEMO REFLECTION · add a local GGUF model for AI',
-                                style: TextStyle(
-                                  fontFamily: 'monospace',
-                                  fontSize: 9,
-                                  letterSpacing: .7,
-                                  color: Color(0xFF6C7469),
-                                ),
-                              ),
-                            ],
-                          ],
+                          'ENTRIES',
+                          style: TextStyle(fontSize: 9, letterSpacing: 1.1),
                         ),
                       ),
+                    ),
+                    _CompactAction(
+                      key: const Key('new-entry'),
+                      tooltip: 'New entry',
+                      onPressed: widget.onAdd,
+                      icon: Icons.add_rounded,
+                    ),
+                    _CompactAction(
+                      key: const Key('finish-journal'),
+                      tooltip: 'Done for now',
+                      onPressed: widget.onFinish,
+                      icon: Icons.check_rounded,
+                    ),
+                  ],
+                ),
+              ),
+              Semantics(
+                container: true,
+                label:
+                    'Current entry, ${safeIndex + 1} of ${widget.entries.length}',
+                value: _entryLabel(selected),
+                increasedValue: safeIndex < widget.entries.length - 1
+                    ? _entryLabel(widget.entries[safeIndex + 1])
+                    : null,
+                decreasedValue: safeIndex > 0
+                    ? _entryLabel(widget.entries[safeIndex - 1])
+                    : null,
+                onIncrease: safeIndex < widget.entries.length - 1
+                    ? () => _moveTo(safeIndex + 1)
+                    : null,
+                onDecrease: safeIndex > 0 ? () => _moveTo(safeIndex - 1) : null,
+                child: ExcludeSemantics(
+                  child: ShaderMask(
+                    shaderCallback: (bounds) => const LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Color(0x80FFFFFF),
+                        Colors.white,
+                        Colors.white,
+                        Color(0x80FFFFFF),
+                      ],
+                      stops: [0, .32, .68, 1],
+                    ).createShader(bounds),
+                    blendMode: BlendMode.dstIn,
+                    child: SizedBox(
+                      height: _itemExtent * 3,
+                      child: NotificationListener<ScrollNotification>(
+                        onNotification: (notification) {
+                          if (notification is ScrollEndNotification) {
+                            unawaited(_commitVisualSelection());
+                          }
+                          return false;
+                        },
+                        child: ListWheelScrollView.useDelegate(
+                          key: const Key('entry-wheel'),
+                          controller: _scrollController,
+                          itemExtent: _itemExtent,
+                          physics: const FixedExtentScrollPhysics(),
+                          diameterRatio: 2.7,
+                          perspective: .002,
+                          squeeze: .92,
+                          overAndUnderCenterOpacity: 1,
+                          onSelectedItemChanged: (index) {
+                            if (_visualIndex != index) {
+                              setState(() => _visualIndex = index);
+                            }
+                          },
+                          childDelegate: ListWheelChildBuilderDelegate(
+                            childCount: widget.entries.length,
+                            builder: (context, index) {
+                              if (index < 0 || index >= widget.entries.length) {
+                                return null;
+                              }
+                              final entry = widget.entries[index];
+                              final isCentered = index == _visualIndex;
+                              return AnimatedOpacity(
+                                key: _positionKey(index),
+                                duration: duration,
+                                opacity: isCentered ? 1 : .62,
+                                child: AnimatedScale(
+                                  duration: duration,
+                                  scale: isCentered ? 1 : .92,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 7,
+                                      vertical: 3,
+                                    ),
+                                    child: DecoratedBox(
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(10),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black.withValues(
+                                              alpha: isCentered ? .09 : .04,
+                                            ),
+                                            blurRadius: isCentered ? 12 : 7,
+                                            offset: const Offset(0, 4),
+                                          ),
+                                        ],
+                                      ),
+                                      child: ClipRRect(
+                                        borderRadius: BorderRadius.circular(10),
+                                        child: BackdropFilter(
+                                          filter: ui.ImageFilter.blur(
+                                            sigmaX: 9,
+                                            sigmaY: 9,
+                                          ),
+                                          child: DecoratedBox(
+                                            decoration: BoxDecoration(
+                                              gradient: LinearGradient(
+                                                begin: Alignment.topLeft,
+                                                end: Alignment.bottomRight,
+                                                colors: highContrast
+                                                    ? const [
+                                                        Color(0xFFFFFCF5),
+                                                        Color(0xFFFFFCF5),
+                                                      ]
+                                                    : isCentered
+                                                    ? const [
+                                                        Color(0xB8FFFFFF),
+                                                        Color(0x7AF6F0E6),
+                                                      ]
+                                                    : const [
+                                                        Color(0x8CFFFFFF),
+                                                        Color(0x52F6F0E6),
+                                                      ],
+                                              ),
+                                              border: Border.all(
+                                                color: highContrast
+                                                    ? const Color(0x994F4B56)
+                                                    : const Color(0x8AFFFFFF),
+                                                width: .75,
+                                              ),
+                                            ),
+                                            child: InkWell(
+                                              key: Key(
+                                                'entry-slip-${entry.id}',
+                                              ),
+                                              onTap: () => _moveTo(index),
+                                              child: Padding(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 10,
+                                                    ),
+                                                child: Row(
+                                                  children: [
+                                                    SizedBox(
+                                                      width: 58,
+                                                      child: Text(
+                                                        entry.type ==
+                                                                DayEntryType
+                                                                    .daily
+                                                            ? 'DAILY'
+                                                            : _entryTime(entry),
+                                                        maxLines: 1,
+                                                        overflow:
+                                                            TextOverflow.fade,
+                                                        softWrap: false,
+                                                        style: const TextStyle(
+                                                          fontSize: 8,
+                                                          letterSpacing: .65,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    const SizedBox(width: 7),
+                                                    Expanded(
+                                                      child: Text(
+                                                        _entryExcerpt(entry),
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        style: TextStyle(
+                                                          fontSize: 11,
+                                                          fontWeight: isCentered
+                                                              ? FontWeight.w600
+                                                              : FontWeight.w400,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ],
           ),
@@ -288,4 +880,69 @@ class _CompanionPane extends StatelessWidget {
       ),
     );
   }
+}
+
+class _CompactAction extends StatelessWidget {
+  const _CompactAction({
+    required this.tooltip,
+    required this.onPressed,
+    required this.icon,
+    super.key,
+  });
+
+  final String tooltip;
+  final Future<void> Function() onPressed;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+    tooltip: tooltip,
+    visualDensity: VisualDensity.compact,
+    constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+    onPressed: onPressed,
+    icon: Icon(icon, size: 19),
+  );
+}
+
+String _entryLabel(DayEntry entry) {
+  if (entry.type == DayEntryType.daily) return 'Daily Journal';
+  if (entry.title.trim().isNotEmpty) return entry.title.trim();
+  return _entryTime(entry);
+}
+
+String _entryExcerpt(DayEntry entry) {
+  if (entry.title.trim().isNotEmpty) return entry.title.trim();
+  if (entry.content.trim().isNotEmpty) return entry.content.trim();
+  return 'Untitled entry';
+}
+
+String _entryTime(DayEntry entry) {
+  final time = entry.createdAt.toLocal();
+  final hour = time.hour == 0
+      ? 12
+      : time.hour > 12
+      ? time.hour - 12
+      : time.hour;
+  final minute = time.minute.toString().padLeft(2, '0');
+  return '$hour:$minute ${time.hour >= 12 ? 'PM' : 'AM'}';
+}
+
+String _friendlyDate(String? dateKey) {
+  if (dateKey == null) return '';
+  final date = localDateFromKey(dateKey);
+  const months = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  return '${months[date.month - 1]} ${date.day}, ${date.year}';
 }
