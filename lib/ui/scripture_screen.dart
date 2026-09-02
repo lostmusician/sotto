@@ -19,21 +19,26 @@ class ScriptureWorkspace extends ConsumerStatefulWidget {
 }
 
 class _ScriptureWorkspaceState extends ConsumerState<ScriptureWorkspace> {
-  final _search = TextEditingController();
-  List<BibleVersion> _versions = const [BundledBibleProvider.version];
+  static const _initialVersion = BibleVersion(
+    id: 'NIV',
+    abbreviation: 'NIV',
+    title: 'New International Version',
+    languageTag: 'en',
+    copyright: '',
+  );
+
+  List<BibleVersion> _versions = const [];
   List<BibleBook> _books = const [];
   List<int> _chapters = const [1];
   List<BiblePassage> _results = const [];
-  BibleVersion _version = BundledBibleProvider.version;
+  BibleVersion _version = _initialVersion;
   BibleBook? _book;
   int _chapter = 1;
   BiblePassage? _selected;
   bool _loading = true;
   Object? _error;
 
-  BibleProvider get _provider => _version.isOffline
-      ? ref.read(bundledBibleProvider)
-      : ref.read(youVersionBibleProvider);
+  BibleProvider get _provider => ref.read(youVersionBibleProvider);
 
   @override
   void initState() {
@@ -41,40 +46,34 @@ class _ScriptureWorkspaceState extends ConsumerState<ScriptureWorkspace> {
     Future.microtask(_initialize);
   }
 
-  @override
-  void dispose() {
-    _search.dispose();
-    super.dispose();
-  }
-
   Future<void> _initialize() async {
     try {
-      final offline = ref.read(bundledBibleProvider);
-      var versions = const [BundledBibleProvider.version];
       final remote = ref.read(youVersionBibleProvider);
-      if (remote.isConfigured) {
-        try {
-          final online = await remote.versions();
-          versions = [
-            BundledBibleProvider.version,
-            ...online.where((item) => item.id != '3034'),
-          ];
-        } catch (_) {
-          // Offline Scripture remains fully functional without an app key.
-        }
+      if (!remote.isConfigured) {
+        throw StateError(
+          'Add a YouVersion app key to browse ESV, NIV, ERV, and NKJV.',
+        );
+      }
+      final versions = await remote.versions();
+      if (versions.isEmpty) {
+        throw StateError(
+          'None of ESV, NIV, ERV, or NKJV is licensed to this app key.',
+        );
       }
       final preferredId = ref.read(journalControllerProvider).preferredBibleId;
       final selected = versions.firstWhere(
-        (version) => version.id == preferredId,
-        orElse: () => BundledBibleProvider.version,
+        (version) =>
+            version.id == preferredId ||
+            version.abbreviation.toUpperCase() == preferredId.toUpperCase(),
+        orElse: () => versions.firstWhere(
+          (version) => version.abbreviation.toUpperCase() == 'NIV',
+          orElse: () => versions.first,
+        ),
       );
-      final selectedProvider = selected.isOffline
-          ? offline
-          : ref.read(youVersionBibleProvider);
-      final books = await selectedProvider.books(selected);
+      final books = await remote.books(selected);
       final chapters = books.isEmpty
           ? const [1]
-          : await selectedProvider.chapters(selected, books.first);
+          : await remote.chapters(selected, books.first);
       if (!mounted) return;
       setState(() {
         _versions = versions;
@@ -86,7 +85,12 @@ class _ScriptureWorkspaceState extends ConsumerState<ScriptureWorkspace> {
       });
       await _loadChapter();
     } catch (error) {
-      if (mounted) setState(() => _error = error);
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = error;
+        });
+      }
     }
   }
 
@@ -99,7 +103,7 @@ class _ScriptureWorkspaceState extends ConsumerState<ScriptureWorkspace> {
     try {
       await ref
           .read(journalControllerProvider.notifier)
-          .setPreferredBibleId(version.id);
+          .setPreferredBibleId(version.abbreviation.toUpperCase());
       final books = await _provider.books(version);
       final chapters = books.isEmpty
           ? const [1]
@@ -176,20 +180,6 @@ class _ScriptureWorkspaceState extends ConsumerState<ScriptureWorkspace> {
     }
   }
 
-  Future<void> _runSearch() async {
-    final query = _search.text.trim();
-    if (query.isEmpty) return _loadChapter();
-    setState(() => _loading = true);
-    try {
-      final results = await _provider.search(_version, query);
-      if (mounted) setState(() => _results = results);
-    } catch (error) {
-      if (mounted) setState(() => _error = error);
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) => SafeArea(
     child: Scaffold(
@@ -212,6 +202,7 @@ class _ScriptureWorkspaceState extends ConsumerState<ScriptureWorkspace> {
               children: [
                 DropdownButtonFormField<BibleVersion>(
                   initialValue: _version,
+                  isExpanded: true,
                   decoration: const InputDecoration(labelText: 'Translation'),
                   items: [
                     for (final version in _versions)
@@ -219,6 +210,7 @@ class _ScriptureWorkspaceState extends ConsumerState<ScriptureWorkspace> {
                         value: version,
                         child: Text(
                           '${version.abbreviation} · ${version.title}',
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                   ],
@@ -268,19 +260,12 @@ class _ScriptureWorkspaceState extends ConsumerState<ScriptureWorkspace> {
                   ],
                 ),
                 const SizedBox(height: 10),
-                SearchBar(
-                  controller: _search,
-                  hintText: _version.isOffline
-                      ? 'Search the BSB offline'
-                      : 'Online versions support reference browsing',
-                  leading: const Icon(Icons.search),
-                  onSubmitted: (_) => _runSearch(),
-                  trailing: [
-                    IconButton(
-                      onPressed: _runSearch,
-                      icon: const Icon(Icons.arrow_forward),
-                    ),
-                  ],
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Available translations depend on the licenses approved for this app.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
                 ),
               ],
             ),

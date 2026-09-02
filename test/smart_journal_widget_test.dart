@@ -39,7 +39,7 @@ void main() {
   });
 
   testWidgets(
-    'Christian Mode creates Quiet Time and attaches offline Scripture',
+    'Christian Mode creates Quiet Time and attaches licensed Scripture',
     (tester) async {
       final harness = await _pumpCompletedApp(tester, christianMode: true);
 
@@ -60,11 +60,6 @@ void main() {
       expect(find.text('Observation'), findsOneWidget);
       expect(find.byKey(const Key('gratitude-editor')), findsNothing);
 
-      await tester.runAsync(
-        () => harness.container
-            .read(bundledBibleProvider)
-            .books(BundledBibleProvider.version),
-      );
       await tester.tap(find.byKey(const Key('open-scripture')));
       await tester.pumpAndSettle();
       expect(find.text('Scripture'), findsOneWidget);
@@ -78,7 +73,7 @@ void main() {
           .selectedEntryId!;
       final references = await harness.database.scripturesForEntry(entryId);
       expect(references.single.reference, 'Genesis 1:1');
-      expect(references.single.cachedText, isNotEmpty);
+      expect(references.single.cachedText, isNull);
       expect(find.text('Genesis 1:1'), findsOneWidget);
     },
   );
@@ -104,7 +99,10 @@ Future<_Harness> _pumpCompletedApp(
     '$christianMode',
   );
   final container = ProviderContainer(
-    overrides: [databaseServiceProvider.overrideWithValue(database)],
+    overrides: [
+      databaseServiceProvider.overrideWithValue(database),
+      youVersionBibleProvider.overrideWithValue(_FixtureBibleProvider()),
+    ],
   );
   await tester.pumpWidget(
     UncontrolledProviderScope(
@@ -120,6 +118,39 @@ Future<_Harness> _pumpCompletedApp(
   final harness = _Harness(container, database, daily);
   addTearDown(harness.dispose);
   return harness;
+}
+
+class _FixtureBibleProvider extends YouVersionBibleProvider {
+  _FixtureBibleProvider() : super(appKey: 'fixture');
+
+  static const version = BibleVersion(
+    id: '111',
+    abbreviation: 'NIV',
+    title: 'New International Version',
+    languageTag: 'en',
+    copyright: 'NIV fixture attribution',
+  );
+
+  @override
+  Future<List<BibleVersion>> versions() async => const [version];
+
+  @override
+  Future<List<BibleBook>> books(BibleVersion version) async => const [
+    BibleBook('GEN', 'Genesis', 1),
+  ];
+
+  @override
+  Future<List<int>> chapters(BibleVersion version, BibleBook book) async =>
+      const [1];
+
+  @override
+  Future<BiblePassage> passage(BibleVersion version, String passageId) async =>
+      BiblePassage(
+        id: 'GEN.1.1',
+        reference: 'Genesis 1:1',
+        content: 'In the beginning God created the heavens and the earth.',
+        version: version,
+      );
 }
 
 class _Harness {

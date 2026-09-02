@@ -46,14 +46,13 @@ replace manual tags.
 
 Christian Mode is opt-in and hidden when disabled. It adds:
 
-- The public-domain Berean Standard Bible for guaranteed offline reading and
-  search.
+- A focused choice of ESV, NIV, ERV, and NKJV through YouVersion.
 - A Scripture workspace shown beside the editor on desktop and as a full-height
   sheet on phones.
 - Structured verse attachments and insertion at the editor cursor.
 - Quiet Time entries with optional Observation, Application, and Prayer fields.
-- Optional YouVersion translations when the app has an approved registration,
-  the requested translation is licensed, and the device is online.
+- Translation access when the app has an approved registration, the requested
+  version is licensed, and the device is online.
 
 Only user-authored reflection and structured Scripture references are embedded.
 Licensed passage text is not stored in journal records.
@@ -68,8 +67,9 @@ Supply the key at build or run time; never commit it:
 flutter run -d macos --dart-define=YOUVERSION_APP_KEY=your_app_key
 ```
 
-Without a key, Sotto falls back to the bundled offline Bible. YouVersion
-passages retain their required translation label and copyright attribution.
+Without a key or the necessary translation licenses, the Scripture workspace
+explains that access is unavailable. Passages retain their required translation
+label and copyright attribution.
 
 ## Getting started
 
@@ -94,7 +94,7 @@ desktop target and pass its identifier to `flutter run -d`.
   tokenization, and ONNX inference.
 - `lib/services/organization_service.dart` — tagging, canonicalization, gradual
   indexing, and related-entry ranking.
-- `lib/services/bible_service.dart` — bundled and YouVersion Bible providers.
+- `lib/services/bible_service.dart` — licensed YouVersion Bible access.
 - `lib/providers` — time-aware routing, editor state, binder navigation, and
   capability-aware optional services.
 - `lib/ui` — mood dial, full-page editor, binder, discovery, settings, and
@@ -133,14 +133,12 @@ Current verification status:
 
 - Journal data and analysis stay on-device.
 - Smart Organization only uses the network to download its optional model.
-- Christian Mode only uses the network for explicitly selected YouVersion
-  content; the bundled Bible remains available offline.
+- Christian Mode uses the network for explicitly selected YouVersion content.
 - No API keys are stored in the repository.
 
 ## License
 
-Sotto is available under the [MIT License](LICENSE). Bundled data, models,
-packages, and remote Bible translations retain their respective licenses and
-attribution requirements. Arctic Embed XS is Apache-2.0 licensed; YouVersion
-content is governed by the terms and translation licenses granted to the
-registered app.
+Sotto is available under the [MIT License](LICENSE). Models, packages, and
+remote Bible translations retain their respective licenses and attribution
+requirements. Arctic Embed XS is Apache-2.0 licensed; YouVersion content is
+governed by the terms and translation licenses granted to the registered app.

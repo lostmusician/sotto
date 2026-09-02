@@ -14,7 +14,7 @@ class FakeDatabaseService extends DatabaseService {
   final Map<String, String> settings = {
     DatabaseService.smartOrganizationSettingKey: 'false',
     DatabaseService.christianModeSettingKey: 'false',
-    DatabaseService.preferredBibleSettingKey: 'BSB',
+    DatabaseService.preferredBibleSettingKey: 'NIV',
   };
   bool failEntrySaves = false;
   int saveDayEntryCallCount = 0;

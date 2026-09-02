@@ -156,7 +156,7 @@ class SottoSettingsSheet extends ConsumerWidget {
               contentPadding: EdgeInsets.zero,
               title: const Text('Christian Mode'),
               subtitle: const Text(
-                'Add offline Scripture, verse attachments, and Quiet Time entries.',
+                'Add licensed Scripture, verse attachments, and Quiet Time entries.',
               ),
               value: app.christianModeEnabled,
               onChanged: (enabled) => ref
@@ -168,10 +168,8 @@ class SottoSettingsSheet extends ConsumerWidget {
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.menu_book_outlined),
                 title: const Text('Preferred Bible'),
-                subtitle: Text(
-                  app.preferredBibleId == 'BSB'
-                      ? 'Berean Standard Bible · available offline'
-                      : 'Translation selected in the Scripture workspace',
+                subtitle: const Text(
+                  'Choose ESV, NIV, ERV, or NKJV in the Scripture workspace',
                 ),
                 trailing: Text(app.preferredBibleId),
               ),

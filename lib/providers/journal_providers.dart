@@ -38,10 +38,6 @@ final embeddingServiceProvider = Provider<EmbeddingService>((ref) {
   return service;
 });
 
-final bundledBibleProvider = Provider<BibleProvider>(
-  (ref) => BundledBibleProvider(),
-);
-
 final youVersionBibleProvider = Provider<YouVersionBibleProvider>((ref) {
   final provider = YouVersionBibleProvider();
   ref.onDispose(provider.close);
@@ -60,7 +56,7 @@ class JournalAppState {
     this.showMoodReminder = false,
     this.smartOrganizationEnabled = false,
     this.christianModeEnabled = false,
-    this.preferredBibleId = 'BSB',
+    this.preferredBibleId = 'NIV',
     this.isLoading = false,
     this.error,
   });

@@ -104,6 +104,20 @@ void main() {
     expect(loaded.minute, 15);
   });
 
+  test(
+    'uses NIV when no preference exists or the legacy BSB is selected',
+    () async {
+      expect(await database.preferredBibleId(), 'NIV');
+
+      await database.saveSetting(
+        DatabaseService.preferredBibleSettingKey,
+        'BSB',
+      );
+
+      expect(await database.preferredBibleId(), 'NIV');
+    },
+  );
+
   test('includes a mood-only day in recorded-date pagination', () async {
     const dateKey = '2026-08-30';
     await database.saveCheckIn(

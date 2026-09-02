@@ -153,7 +153,7 @@ class DatabaseService {
     }, conflictAlgorithm: ConflictAlgorithm.ignore);
     await db.insert('app_settings', {
       'setting_key': preferredBibleSettingKey,
-      'setting_value': 'BSB',
+      'setting_value': 'NIV',
     }, conflictAlgorithm: ConflictAlgorithm.ignore);
   }
 
@@ -612,8 +612,10 @@ class DatabaseService {
   Future<bool> christianModeEnabled() async =>
       await setting(christianModeSettingKey) == 'true';
 
-  Future<String> preferredBibleId() async =>
-      await setting(preferredBibleSettingKey) ?? 'BSB';
+  Future<String> preferredBibleId() async {
+    final value = await setting(preferredBibleSettingKey);
+    return value == null || value == 'BSB' ? 'NIV' : value;
+  }
 
   Future<List<JournalTag>> allTags() async {
     final db = await database;
