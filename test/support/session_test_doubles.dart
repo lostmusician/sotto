@@ -5,7 +5,17 @@ class FakeDatabaseService extends DatabaseService {
   final Map<String, JournalDay> days = {};
   final Map<String, DayEntry> entries = {};
   final Map<String, DailyCheckIn> checkIns = {};
+  final Map<String, JournalTag> tags = {};
+  final Map<String, List<EntryTag>> entryTags = {};
+  final Map<String, List<EntryRelationship>> relationships = {};
+  final Map<String, List<ScriptureReference>> scriptures = {};
+  final Map<String, QuietTimeReflection> quietTimes = {};
   EveningPreference preference = const EveningPreference();
+  final Map<String, String> settings = {
+    DatabaseService.smartOrganizationSettingKey: 'false',
+    DatabaseService.christianModeSettingKey: 'false',
+    DatabaseService.preferredBibleSettingKey: 'BSB',
+  };
   bool failEntrySaves = false;
   int saveDayEntryCallCount = 0;
 
@@ -100,6 +110,117 @@ class FakeDatabaseService extends DatabaseService {
   @override
   Future<void> saveEveningPreference(EveningPreference value) async {
     preference = value;
+  }
+
+  @override
+  Future<String?> setting(String key) async => settings[key];
+
+  @override
+  Future<void> saveSetting(String key, String value) async {
+    settings[key] = value;
+  }
+
+  @override
+  Future<List<JournalTag>> allTags() async => tags.values.toList();
+
+  @override
+  Future<List<EntryTag>> tagsForEntry(String entryId) async =>
+      entryTags[entryId] ?? const [];
+
+  @override
+  Future<JournalTag> ensureTag(String name, {DateTime? now}) async {
+    final normalized = normalizeTagName(name);
+    return tags.values.firstWhere(
+      (tag) => tag.normalizedName == normalized,
+      orElse: () {
+        final tag = JournalTag.create(name, now: now);
+        tags[tag.id] = tag;
+        return tag;
+      },
+    );
+  }
+
+  @override
+  Future<void> attachTag({
+    required String entryId,
+    required JournalTag tag,
+    required EntryTagSource source,
+    double? confidence,
+  }) async {
+    final values = entryTags.putIfAbsent(entryId, () => []);
+    values.removeWhere((value) => value.tag.id == tag.id);
+    values.add(
+      EntryTag(
+        entryId: entryId,
+        tag: tag,
+        source: source,
+        confidence: confidence,
+      ),
+    );
+  }
+
+  @override
+  Future<void> detachTag(String entryId, String tagId) async {
+    entryTags[entryId]?.removeWhere((value) => value.tag.id == tagId);
+  }
+
+  @override
+  Future<List<EntryRelationship>> relationshipsForEntry(
+    String entryId, {
+    int limit = 8,
+  }) async => (relationships[entryId] ?? const []).take(limit).toList();
+
+  @override
+  Future<List<ScriptureReference>> scripturesForEntry(String entryId) async =>
+      scriptures[entryId] ?? const [];
+
+  @override
+  Future<void> saveScripture(ScriptureReference reference) async {
+    final values = scriptures.putIfAbsent(reference.entryId, () => []);
+    values.removeWhere((value) => value.id == reference.id);
+    values.add(reference);
+  }
+
+  @override
+  Future<QuietTimeReflection?> quietTimeForEntry(String entryId) async =>
+      quietTimes[entryId];
+
+  @override
+  Future<void> saveQuietTime(QuietTimeReflection reflection) async {
+    quietTimes[reflection.entryId] = reflection;
+  }
+
+  @override
+  Future<List<JournalSearchResult>> searchEntries(
+    JournalSearchQuery query, {
+    int limit = 50,
+  }) async {
+    final needle = query.text.toLowerCase();
+    return entries.values
+        .where((entry) => !entry.isEmpty)
+        .where(
+          (entry) =>
+              needle.isEmpty ||
+              entry.title.toLowerCase().contains(needle) ||
+              entry.content.toLowerCase().contains(needle),
+        )
+        .where(
+          (entry) => query.purpose == null || entry.purpose == query.purpose,
+        )
+        .where((entry) {
+          final ids = (entryTags[entry.id] ?? const [])
+              .map((value) => value.tag.id)
+              .toSet();
+          return query.tagIds.every(ids.contains);
+        })
+        .take(limit)
+        .map(
+          (entry) => JournalSearchResult(
+            entry: entry,
+            tags: entryTags[entry.id] ?? const [],
+          ),
+        )
+        .toList();
   }
 
   @override
