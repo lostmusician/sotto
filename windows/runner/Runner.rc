@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.ivanchiew" "\0"
-            VALUE "FileDescription", "sotto" "\0"
+            VALUE "FileDescription", "Meno" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "sotto" "\0"
+            VALUE "InternalName", "meno" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.ivanchiew. All rights reserved." "\0"
-            VALUE "OriginalFilename", "sotto.exe" "\0"
-            VALUE "ProductName", "sotto" "\0"
+            VALUE "OriginalFilename", "meno.exe" "\0"
+            VALUE "ProductName", "Meno" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

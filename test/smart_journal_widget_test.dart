@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sotto/models/journal_entry.dart';
-import 'package:sotto/providers/journal_providers.dart';
-import 'package:sotto/services/bible_service.dart';
-import 'package:sotto/services/database_service.dart';
-import 'package:sotto/ui/editor_screen.dart';
+import 'package:meno/models/journal_entry.dart';
+import 'package:meno/providers/journal_providers.dart';
+import 'package:meno/services/bible_service.dart';
+import 'package:meno/services/database_service.dart';
+import 'package:meno/ui/editor_screen.dart';
+import 'package:meno/ui/scripture_screen.dart';
 
 import 'support/session_test_doubles.dart';
 
@@ -39,7 +40,7 @@ void main() {
   });
 
   testWidgets(
-    'Christian Mode creates Quiet Time and attaches offline Scripture',
+    'Christian Mode creates Quiet Time and attaches licensed Scripture',
     (tester) async {
       final harness = await _pumpCompletedApp(tester, christianMode: true);
 
@@ -60,11 +61,6 @@ void main() {
       expect(find.text('Observation'), findsOneWidget);
       expect(find.byKey(const Key('gratitude-editor')), findsNothing);
 
-      await tester.runAsync(
-        () => harness.container
-            .read(bundledBibleProvider)
-            .books(BundledBibleProvider.version),
-      );
       await tester.tap(find.byKey(const Key('open-scripture')));
       await tester.pumpAndSettle();
       expect(find.text('Scripture'), findsOneWidget);
@@ -78,10 +74,65 @@ void main() {
           .selectedEntryId!;
       final references = await harness.database.scripturesForEntry(entryId);
       expect(references.single.reference, 'Genesis 1:1');
-      expect(references.single.cachedText, isNotEmpty);
+      expect(references.single.cachedText, isNull);
       expect(find.text('Genesis 1:1'), findsOneWidget);
     },
   );
+
+  testWidgets('Scripture workspace scrolls in a short desktop window', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(800, 320);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+
+    final container = ProviderContainer(
+      overrides: [
+        youVersionBibleProvider.overrideWithValue(_FixtureBibleProvider()),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: ScriptureWorkspace()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('NIV · New International Version'), findsOneWidget);
+  });
+
+  testWidgets('desktop phases avoid bottom overflow in a short window', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(900, 360);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+
+    final harness = await _pumpCompletedApp(tester, christianMode: true);
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.byKey(const Key('binder-settings')));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    Navigator.of(tester.element(find.text('Meno settings'))).pop();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('edit-journal')));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+
+    await harness.container
+        .read(journalControllerProvider.notifier)
+        .openMood('2026-09-01');
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
 }
 
 Future<_Harness> _pumpCompletedApp(
@@ -104,7 +155,10 @@ Future<_Harness> _pumpCompletedApp(
     '$christianMode',
   );
   final container = ProviderContainer(
-    overrides: [databaseServiceProvider.overrideWithValue(database)],
+    overrides: [
+      databaseServiceProvider.overrideWithValue(database),
+      youVersionBibleProvider.overrideWithValue(_FixtureBibleProvider()),
+    ],
   );
   await tester.pumpWidget(
     UncontrolledProviderScope(
@@ -120,6 +174,39 @@ Future<_Harness> _pumpCompletedApp(
   final harness = _Harness(container, database, daily);
   addTearDown(harness.dispose);
   return harness;
+}
+
+class _FixtureBibleProvider extends YouVersionBibleProvider {
+  _FixtureBibleProvider() : super(appKey: 'fixture');
+
+  static const version = BibleVersion(
+    id: '111',
+    abbreviation: 'NIV',
+    title: 'New International Version',
+    languageTag: 'en',
+    copyright: 'NIV fixture attribution',
+  );
+
+  @override
+  Future<List<BibleVersion>> versions() async => const [version];
+
+  @override
+  Future<List<BibleBook>> books(BibleVersion version) async => const [
+    BibleBook('GEN', 'Genesis', 1),
+  ];
+
+  @override
+  Future<List<int>> chapters(BibleVersion version, BibleBook book) async =>
+      const [1];
+
+  @override
+  Future<BiblePassage> passage(BibleVersion version, String passageId) async =>
+      BiblePassage(
+        id: 'GEN.1.1',
+        reference: 'Genesis 1:1',
+        content: 'In the beginning God created the heavens and the earth.',
+        version: version,
+      );
 }
 
 class _Harness {

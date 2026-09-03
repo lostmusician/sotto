@@ -1,5 +1,5 @@
-import 'package:sotto/models/journal_entry.dart';
-import 'package:sotto/services/database_service.dart';
+import 'package:meno/models/journal_entry.dart';
+import 'package:meno/services/database_service.dart';
 
 class FakeDatabaseService extends DatabaseService {
   final Map<String, JournalDay> days = {};
@@ -14,7 +14,7 @@ class FakeDatabaseService extends DatabaseService {
   final Map<String, String> settings = {
     DatabaseService.smartOrganizationSettingKey: 'false',
     DatabaseService.christianModeSettingKey: 'false',
-    DatabaseService.preferredBibleSettingKey: 'BSB',
+    DatabaseService.preferredBibleSettingKey: 'NIV',
   };
   bool failEntrySaves = false;
   int saveDayEntryCallCount = 0;

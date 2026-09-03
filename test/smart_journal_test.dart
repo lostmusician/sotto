@@ -1,11 +1,11 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sotto/models/journal_entry.dart';
-import 'package:sotto/services/database_service.dart';
-import 'package:sotto/services/embedding_service.dart';
-import 'package:sotto/services/keyphrase_service.dart';
-import 'package:sotto/services/organization_service.dart';
+import 'package:meno/models/journal_entry.dart';
+import 'package:meno/services/database_service.dart';
+import 'package:meno/services/embedding_service.dart';
+import 'package:meno/services/keyphrase_service.dart';
+import 'package:meno/services/organization_service.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
@@ -158,7 +158,7 @@ void main() {
   });
 
   test('migrates v3 entries to freeform and rebuilds search', () async {
-    final directory = await Directory.systemTemp.createTemp('sotto-v4-');
+    final directory = await Directory.systemTemp.createTemp('meno-v4-');
     addTearDown(() => directory.delete(recursive: true));
     final path = '${directory.path}/legacy.sqlite';
     final legacy = await databaseFactoryFfi.openDatabase(

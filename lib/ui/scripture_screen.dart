@@ -19,21 +19,26 @@ class ScriptureWorkspace extends ConsumerStatefulWidget {
 }
 
 class _ScriptureWorkspaceState extends ConsumerState<ScriptureWorkspace> {
-  final _search = TextEditingController();
-  List<BibleVersion> _versions = const [BundledBibleProvider.version];
+  static const _initialVersion = BibleVersion(
+    id: 'NIV',
+    abbreviation: 'NIV',
+    title: 'New International Version',
+    languageTag: 'en',
+    copyright: '',
+  );
+
+  List<BibleVersion> _versions = const [];
   List<BibleBook> _books = const [];
   List<int> _chapters = const [1];
   List<BiblePassage> _results = const [];
-  BibleVersion _version = BundledBibleProvider.version;
+  BibleVersion _version = _initialVersion;
   BibleBook? _book;
   int _chapter = 1;
   BiblePassage? _selected;
   bool _loading = true;
   Object? _error;
 
-  BibleProvider get _provider => _version.isOffline
-      ? ref.read(bundledBibleProvider)
-      : ref.read(youVersionBibleProvider);
+  BibleProvider get _provider => ref.read(youVersionBibleProvider);
 
   @override
   void initState() {
@@ -41,40 +46,34 @@ class _ScriptureWorkspaceState extends ConsumerState<ScriptureWorkspace> {
     Future.microtask(_initialize);
   }
 
-  @override
-  void dispose() {
-    _search.dispose();
-    super.dispose();
-  }
-
   Future<void> _initialize() async {
     try {
-      final offline = ref.read(bundledBibleProvider);
-      var versions = const [BundledBibleProvider.version];
       final remote = ref.read(youVersionBibleProvider);
-      if (remote.isConfigured) {
-        try {
-          final online = await remote.versions();
-          versions = [
-            BundledBibleProvider.version,
-            ...online.where((item) => item.id != '3034'),
-          ];
-        } catch (_) {
-          // Offline Scripture remains fully functional without an app key.
-        }
+      if (!remote.isConfigured) {
+        throw StateError(
+          'Add a YouVersion app key to browse ESV, NIV, ERV, and NKJV.',
+        );
+      }
+      final versions = await remote.versions();
+      if (versions.isEmpty) {
+        throw StateError(
+          'None of ESV, NIV, ERV, or NKJV is licensed to this app key.',
+        );
       }
       final preferredId = ref.read(journalControllerProvider).preferredBibleId;
       final selected = versions.firstWhere(
-        (version) => version.id == preferredId,
-        orElse: () => BundledBibleProvider.version,
+        (version) =>
+            version.id == preferredId ||
+            version.abbreviation.toUpperCase() == preferredId.toUpperCase(),
+        orElse: () => versions.firstWhere(
+          (version) => version.abbreviation.toUpperCase() == 'NIV',
+          orElse: () => versions.first,
+        ),
       );
-      final selectedProvider = selected.isOffline
-          ? offline
-          : ref.read(youVersionBibleProvider);
-      final books = await selectedProvider.books(selected);
+      final books = await remote.books(selected);
       final chapters = books.isEmpty
           ? const [1]
-          : await selectedProvider.chapters(selected, books.first);
+          : await remote.chapters(selected, books.first);
       if (!mounted) return;
       setState(() {
         _versions = versions;
@@ -86,7 +85,12 @@ class _ScriptureWorkspaceState extends ConsumerState<ScriptureWorkspace> {
       });
       await _loadChapter();
     } catch (error) {
-      if (mounted) setState(() => _error = error);
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = error;
+        });
+      }
     }
   }
 
@@ -99,7 +103,7 @@ class _ScriptureWorkspaceState extends ConsumerState<ScriptureWorkspace> {
     try {
       await ref
           .read(journalControllerProvider.notifier)
-          .setPreferredBibleId(version.id);
+          .setPreferredBibleId(version.abbreviation.toUpperCase());
       final books = await _provider.books(version);
       final chapters = books.isEmpty
           ? const [1]
@@ -176,20 +180,6 @@ class _ScriptureWorkspaceState extends ConsumerState<ScriptureWorkspace> {
     }
   }
 
-  Future<void> _runSearch() async {
-    final query = _search.text.trim();
-    if (query.isEmpty) return _loadChapter();
-    setState(() => _loading = true);
-    try {
-      final results = await _provider.search(_version, query);
-      if (mounted) setState(() => _results = results);
-    } catch (error) {
-      if (mounted) setState(() => _error = error);
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) => SafeArea(
     child: Scaffold(
@@ -206,150 +196,159 @@ class _ScriptureWorkspaceState extends ConsumerState<ScriptureWorkspace> {
       ),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
-            child: Column(
+          if (_loading) const LinearProgressIndicator(),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.only(bottom: 20),
               children: [
-                DropdownButtonFormField<BibleVersion>(
-                  initialValue: _version,
-                  decoration: const InputDecoration(labelText: 'Translation'),
-                  items: [
-                    for (final version in _versions)
-                      DropdownMenuItem(
-                        value: version,
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+                  child: Column(
+                    children: [
+                      DropdownButtonFormField<BibleVersion>(
+                        initialValue: _version,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Translation',
+                        ),
+                        items: [
+                          for (final version in _versions)
+                            DropdownMenuItem(
+                              value: version,
+                              child: Text(
+                                '${version.abbreviation} · ${version.title}',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                        ],
+                        onChanged: (value) {
+                          if (value != null) _changeVersion(value);
+                        },
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            flex: 2,
+                            child: DropdownButtonFormField<BibleBook>(
+                              initialValue: _book,
+                              isExpanded: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Book',
+                              ),
+                              items: [
+                                for (final book in _books)
+                                  DropdownMenuItem(
+                                    value: book,
+                                    child: Text(
+                                      book.name,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                              ],
+                              onChanged: (value) {
+                                if (value != null) _changeBook(value);
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: DropdownButtonFormField<int>(
+                              initialValue: _chapter,
+                              decoration: const InputDecoration(
+                                labelText: 'Chapter',
+                              ),
+                              items: [
+                                for (final chapter in _chapters)
+                                  DropdownMenuItem(
+                                    value: chapter,
+                                    child: Text('$chapter'),
+                                  ),
+                              ],
+                              onChanged: (value) {
+                                if (value == null) return;
+                                setState(() => _chapter = value);
+                                _loadChapter();
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Align(
+                        alignment: Alignment.centerLeft,
                         child: Text(
-                          '${version.abbreviation} · ${version.title}',
+                          'Available translations depend on the licenses approved for this app.',
+                          style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ),
-                  ],
-                  onChanged: (value) {
-                    if (value != null) _changeVersion(value);
-                  },
+                    ],
+                  ),
                 ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      flex: 2,
-                      child: DropdownButtonFormField<BibleBook>(
-                        initialValue: _book,
-                        decoration: const InputDecoration(labelText: 'Book'),
-                        items: [
-                          for (final book in _books)
-                            DropdownMenuItem(
-                              value: book,
-                              child: Text(book.name),
-                            ),
-                        ],
-                        onChanged: (value) {
-                          if (value != null) _changeBook(value);
-                        },
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: SelectableText(
+                      'Scripture could not be loaded: $_error',
+                    ),
+                  ),
+                for (final passage in _results)
+                  Card(
+                    margin: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 4,
+                    ),
+                    color: _selected?.id == passage.id
+                        ? Theme.of(context).colorScheme.primaryContainer
+                        : null,
+                    child: ListTile(
+                      selected: _selected?.id == passage.id,
+                      title: Text(passage.reference),
+                      subtitle: Text(
+                        passage.content,
+                        style: const TextStyle(
+                          fontFamily: 'Georgia',
+                          height: 1.4,
+                        ),
                       ),
+                      onTap: () => setState(() => _selected = passage),
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: DropdownButtonFormField<int>(
-                        initialValue: _chapter,
-                        decoration: const InputDecoration(labelText: 'Chapter'),
-                        items: [
-                          for (final chapter in _chapters)
-                            DropdownMenuItem(
-                              value: chapter,
-                              child: Text('$chapter'),
+                  ),
+                if (_selected != null)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.pop(
+                              context,
+                              ScriptureSelection(_selected!, insertText: false),
                             ),
-                        ],
-                        onChanged: (value) {
-                          if (value == null) return;
-                          setState(() => _chapter = value);
-                          _loadChapter();
-                        },
-                      ),
+                            child: const Text('Attach verse'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: FilledButton(
+                            onPressed: () => Navigator.pop(
+                              context,
+                              ScriptureSelection(_selected!, insertText: true),
+                            ),
+                            child: const Text('Attach & insert'),
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                SearchBar(
-                  controller: _search,
-                  hintText: _version.isOffline
-                      ? 'Search the BSB offline'
-                      : 'Online versions support reference browsing',
-                  leading: const Icon(Icons.search),
-                  onSubmitted: (_) => _runSearch(),
-                  trailing: [
-                    IconButton(
-                      onPressed: _runSearch,
-                      icon: const Icon(Icons.arrow_forward),
-                    ),
-                  ],
+                  ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                  child: Text(
+                    _version.copyright,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
                 ),
               ],
-            ),
-          ),
-          if (_loading) const LinearProgressIndicator(),
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text('Scripture could not be loaded: $_error'),
-            ),
-          Expanded(
-            child: ListView.builder(
-              padding: const EdgeInsets.fromLTRB(14, 4, 14, 20),
-              itemCount: _results.length,
-              itemBuilder: (context, index) {
-                final passage = _results[index];
-                final selected = _selected?.id == passage.id;
-                return Card(
-                  color: selected
-                      ? Theme.of(context).colorScheme.primaryContainer
-                      : null,
-                  child: ListTile(
-                    selected: selected,
-                    title: Text(passage.reference),
-                    subtitle: Text(
-                      passage.content,
-                      style: const TextStyle(
-                        fontFamily: 'Georgia',
-                        height: 1.4,
-                      ),
-                    ),
-                    onTap: () => setState(() => _selected = passage),
-                  ),
-                );
-              },
-            ),
-          ),
-          if (_selected != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(
-                        context,
-                        ScriptureSelection(_selected!, insertText: false),
-                      ),
-                      child: const Text('Attach verse'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: () => Navigator.pop(
-                        context,
-                        ScriptureSelection(_selected!, insertText: true),
-                      ),
-                      child: const Text('Attach & insert'),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-            child: Text(
-              _version.copyright,
-              style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
         ],

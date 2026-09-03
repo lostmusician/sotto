@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.ivanchiew.sotto"
+    namespace = "com.ivanchiew.meno"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -21,6 +21,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
+        // Retained so Meno upgrades existing Sotto installations in place.
         applicationId = "com.ivanchiew.sotto"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
