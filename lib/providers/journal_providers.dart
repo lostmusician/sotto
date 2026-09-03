@@ -55,7 +55,7 @@ class JournalAppState {
     this.eveningPreference = const EveningPreference(),
     this.showMoodReminder = false,
     this.smartOrganizationEnabled = false,
-    this.christianModeEnabled = false,
+    this.quietTimeLoggingEnabled = false,
     this.preferredBibleId = 'NIV',
     this.isLoading = false,
     this.error,
@@ -70,7 +70,7 @@ class JournalAppState {
   final EveningPreference eveningPreference;
   final bool showMoodReminder;
   final bool smartOrganizationEnabled;
-  final bool christianModeEnabled;
+  final bool quietTimeLoggingEnabled;
   final String preferredBibleId;
   final bool isLoading;
   final Object? error;
@@ -94,7 +94,7 @@ class JournalAppState {
     EveningPreference? eveningPreference,
     bool? showMoodReminder,
     bool? smartOrganizationEnabled,
-    bool? christianModeEnabled,
+    bool? quietTimeLoggingEnabled,
     String? preferredBibleId,
     bool? isLoading,
     Object? error,
@@ -112,7 +112,8 @@ class JournalAppState {
     showMoodReminder: showMoodReminder ?? this.showMoodReminder,
     smartOrganizationEnabled:
         smartOrganizationEnabled ?? this.smartOrganizationEnabled,
-    christianModeEnabled: christianModeEnabled ?? this.christianModeEnabled,
+    quietTimeLoggingEnabled:
+        quietTimeLoggingEnabled ?? this.quietTimeLoggingEnabled,
     preferredBibleId: preferredBibleId ?? this.preferredBibleId,
     isLoading: isLoading ?? this.isLoading,
     error: clearError ? null : error ?? this.error,
@@ -133,7 +134,7 @@ class JournalController extends StateNotifier<JournalAppState> {
       final preferences = await Future.wait<Object>([
         _database.eveningPreference(),
         _database.smartOrganizationEnabled(),
-        _database.christianModeEnabled(),
+        _database.quietTimeLoggingEnabled(),
         _database.preferredBibleId(),
       ]);
       final preference = preferences[0] as EveningPreference;
@@ -146,7 +147,7 @@ class JournalController extends StateNotifier<JournalAppState> {
         clearCheckIn: binderDay.checkIn == null,
         eveningPreference: preference,
         smartOrganizationEnabled: preferences[1] as bool,
-        christianModeEnabled: preferences[2] as bool,
+        quietTimeLoggingEnabled: preferences[2] as bool,
         preferredBibleId: preferences[3] as String,
         isLoading: false,
       );
@@ -423,12 +424,12 @@ class JournalController extends StateNotifier<JournalAppState> {
     state = state.copyWith(smartOrganizationEnabled: enabled);
   }
 
-  Future<void> setChristianModeEnabled(bool enabled) async {
+  Future<void> setQuietTimeLoggingEnabled(bool enabled) async {
     await _database.saveSetting(
-      DatabaseService.christianModeSettingKey,
+      DatabaseService.quietTimeLoggingSettingKey,
       '$enabled',
     );
-    state = state.copyWith(christianModeEnabled: enabled);
+    state = state.copyWith(quietTimeLoggingEnabled: enabled);
   }
 
   Future<void> setPreferredBibleId(String bibleId) async {

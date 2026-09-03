@@ -13,7 +13,7 @@ class FakeDatabaseService extends DatabaseService {
   EveningPreference preference = const EveningPreference();
   final Map<String, String> settings = {
     DatabaseService.smartOrganizationSettingKey: 'false',
-    DatabaseService.christianModeSettingKey: 'false',
+    DatabaseService.quietTimeLoggingSettingKey: 'false',
     DatabaseService.preferredBibleSettingKey: 'NIV',
   };
   bool failEntrySaves = false;

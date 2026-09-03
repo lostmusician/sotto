@@ -152,24 +152,24 @@ class MenoSettingsSheet extends ConsumerWidget {
             ],
             const Divider(),
             SwitchListTile.adaptive(
-              key: const Key('christian-mode-setting'),
+              key: const Key('quiet-time-logging-setting'),
               contentPadding: EdgeInsets.zero,
-              title: const Text('Christian Mode'),
+              title: const Text('Quiet Time logging'),
               subtitle: const Text(
-                'Add licensed Scripture, verse attachments, and Quiet Time entries.',
+                'Create Quiet Time entries and attach Scripture when you want it.',
               ),
-              value: app.christianModeEnabled,
+              value: app.quietTimeLoggingEnabled,
               onChanged: (enabled) => ref
                   .read(journalControllerProvider.notifier)
-                  .setChristianModeEnabled(enabled),
+                  .setQuietTimeLoggingEnabled(enabled),
             ),
-            if (app.christianModeEnabled)
+            if (app.quietTimeLoggingEnabled)
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.menu_book_outlined),
                 title: const Text('Preferred Bible'),
                 subtitle: const Text(
-                  'Choose ESV, NIV, ERV, or NKJV in the Scripture workspace',
+                  'Choose an available translation in the Scripture reader',
                 ),
                 trailing: Text(app.preferredBibleId),
               ),

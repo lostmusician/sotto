@@ -40,15 +40,17 @@ void main() {
   });
 
   testWidgets(
-    'Christian Mode creates Quiet Time and attaches licensed Scripture',
+    'Quiet Time logging creates entries and attaches licensed Scripture',
     (tester) async {
-      final harness = await _pumpCompletedApp(tester, christianMode: true);
+      final harness = await _pumpCompletedApp(tester, quietTimeLogging: true);
 
       await tester.tap(find.byKey(const Key('edit-journal')));
       await tester.pumpAndSettle();
-      expect(find.byKey(const Key('new-quiet-time')), findsOneWidget);
-      expect(find.byKey(const Key('open-scripture')), findsOneWidget);
+      expect(find.byKey(const Key('new-entry')), findsOneWidget);
+      expect(find.byKey(const Key('open-scripture')), findsNothing);
 
+      await tester.tap(find.byKey(const Key('new-entry')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('new-quiet-time')));
       await tester.pumpAndSettle();
       expect(
@@ -61,12 +63,18 @@ void main() {
       expect(find.text('Observation'), findsOneWidget);
       expect(find.byKey(const Key('gratitude-editor')), findsNothing);
 
-      await tester.tap(find.byKey(const Key('open-scripture')));
+      await tester.ensureVisible(find.byKey(const Key('attach-scripture')));
+      await tester.tap(find.byKey(const Key('attach-scripture')));
       await tester.pumpAndSettle();
       expect(find.text('Scripture'), findsOneWidget);
-      await tester.tap(find.text('Genesis 1:1'));
+      expect(find.byKey(const Key('scripture-verse-list')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('scripture-verse-GEN.1.2')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const ValueKey('scripture-verse-GEN.1.1')));
       await tester.pump();
-      await tester.tap(find.text('Attach verse'));
+      await tester.tap(find.byKey(const Key('attach-scripture-reference')));
       await tester.pumpAndSettle();
 
       final entryId = harness.container
@@ -114,12 +122,14 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     addTearDown(tester.view.resetPhysicalSize);
 
-    final harness = await _pumpCompletedApp(tester, christianMode: true);
+    final harness = await _pumpCompletedApp(tester, quietTimeLogging: true);
     expect(tester.takeException(), isNull);
 
     await tester.tap(find.byKey(const Key('binder-settings')));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
+    expect(find.text('Quiet Time logging'), findsOneWidget);
+    expect(find.text('Christian Mode'), findsNothing);
     Navigator.of(tester.element(find.text('Meno settings'))).pop();
     await tester.pumpAndSettle();
 
@@ -137,7 +147,7 @@ void main() {
 
 Future<_Harness> _pumpCompletedApp(
   WidgetTester tester, {
-  bool christianMode = false,
+  bool quietTimeLogging = false,
 }) async {
   final database = FakeDatabaseService();
   const dateKey = '2026-09-01';
@@ -151,8 +161,8 @@ Future<_Harness> _pumpCompletedApp(
     DailyCheckIn.forDate(dateKey: dateKey, moodAngle: .3, moodIntensity: .7),
   );
   await database.saveSetting(
-    DatabaseService.christianModeSettingKey,
-    '$christianMode',
+    DatabaseService.quietTimeLoggingSettingKey,
+    '$quietTimeLogging',
   );
   final container = ProviderContainer(
     overrides: [
@@ -198,6 +208,26 @@ class _FixtureBibleProvider extends YouVersionBibleProvider {
   @override
   Future<List<int>> chapters(BibleVersion version, BibleBook book) async =>
       const [1];
+
+  @override
+  Future<List<BiblePassage>> chapterVerses(
+    BibleVersion version,
+    BibleBook book,
+    int chapter,
+  ) async => [
+    BiblePassage(
+      id: 'GEN.1.1',
+      reference: 'Genesis 1:1',
+      content: 'In the beginning God created the heavens and the earth.',
+      version: version,
+    ),
+    BiblePassage(
+      id: 'GEN.1.2',
+      reference: 'Genesis 1:2',
+      content: 'Now the earth was formless and empty.',
+      version: version,
+    ),
+  ];
 
   @override
   Future<BiblePassage> passage(BibleVersion version, String passageId) async =>

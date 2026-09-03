@@ -266,9 +266,9 @@ class _BinderScreenState extends ConsumerState<BinderScreen>
                     ),
                     IconButton(
                       key: const Key('binder-discovery'),
-                      tooltip: 'Search and connections',
+                      tooltip: 'Search journal',
                       onPressed: _openDiscovery,
-                      icon: const Icon(Icons.auto_awesome_mosaic_outlined),
+                      icon: const Icon(Icons.search_rounded),
                     ),
                     IconButton(
                       key: const Key('binder-settings'),

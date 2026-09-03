@@ -21,7 +21,9 @@ class DatabaseService {
   static const schemaVersion = 4;
   static const eveningSettingKey = 'evening_minutes';
   static const smartOrganizationSettingKey = 'smart_organization_enabled';
-  static const christianModeSettingKey = 'christian_mode_enabled';
+  // Keep the original persisted key so existing opt-in preferences survive
+  // the user-facing rename to Quiet Time logging.
+  static const quietTimeLoggingSettingKey = 'christian_mode_enabled';
   static const preferredBibleSettingKey = 'preferred_bible_id';
 
   final DatabaseFactory? _injectedFactory;
@@ -153,7 +155,7 @@ class DatabaseService {
       'setting_value': 'false',
     }, conflictAlgorithm: ConflictAlgorithm.ignore);
     await db.insert('app_settings', {
-      'setting_key': christianModeSettingKey,
+      'setting_key': quietTimeLoggingSettingKey,
       'setting_value': 'false',
     }, conflictAlgorithm: ConflictAlgorithm.ignore);
     await db.insert('app_settings', {
@@ -622,8 +624,8 @@ class DatabaseService {
   Future<bool> smartOrganizationEnabled() async =>
       await setting(smartOrganizationSettingKey) == 'true';
 
-  Future<bool> christianModeEnabled() async =>
-      await setting(christianModeSettingKey) == 'true';
+  Future<bool> quietTimeLoggingEnabled() async =>
+      await setting(quietTimeLoggingSettingKey) == 'true';
 
   Future<String> preferredBibleId() async {
     final value = await setting(preferredBibleSettingKey);

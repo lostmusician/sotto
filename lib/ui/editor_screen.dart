@@ -560,7 +560,7 @@ class _JournalViewState extends State<_JournalView> {
                                     if (selected.purpose ==
                                         EntryPurpose.quietTime)
                                       _QuietTimeFields(entryId: selected.id),
-                                    if (widget.state.christianModeEnabled)
+                                    if (widget.state.quietTimeLoggingEnabled)
                                       _ScriptureAttachments(
                                         entryId: selected.id,
                                         revision: widget.scriptureRevision,
@@ -611,8 +611,7 @@ class _JournalViewState extends State<_JournalView> {
                     onSelected: widget.onSelectEntry,
                     onAdd: widget.onAddEntry,
                     onAddQuietTime: widget.onAddQuietTime,
-                    onOpenScripture: widget.onOpenScripture,
-                    christianMode: widget.state.christianModeEnabled,
+                    quietTimeLogging: widget.state.quietTimeLoggingEnabled,
                     onFinish: widget.onFinish,
                   ),
                 ),
@@ -792,10 +791,12 @@ class _ScriptureAttachmentsState extends ConsumerState<_ScriptureAttachments> {
 
   @override
   Widget build(BuildContext context) {
-    final christianMode = ref.watch(
-      journalControllerProvider.select((state) => state.christianModeEnabled),
+    final quietTimeLogging = ref.watch(
+      journalControllerProvider.select(
+        (state) => state.quietTimeLoggingEnabled,
+      ),
     );
-    if (!christianMode) return const SizedBox.shrink();
+    if (!quietTimeLogging) return const SizedBox.shrink();
     return FutureBuilder<List<ScriptureReference>>(
       future: _future,
       builder: (context, snapshot) {
@@ -838,6 +839,7 @@ class _ScriptureAttachmentsState extends ConsumerState<_ScriptureAttachments> {
             Align(
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
+                key: const Key('attach-scripture'),
                 onPressed: () async {
                   await widget.onOpenScripture();
                   if (mounted) setState(_reload);
@@ -861,8 +863,7 @@ class _EntryWheel extends StatefulWidget {
     required this.onSelected,
     required this.onAdd,
     required this.onAddQuietTime,
-    required this.onOpenScripture,
-    required this.christianMode,
+    required this.quietTimeLogging,
     required this.onFinish,
   });
 
@@ -872,8 +873,7 @@ class _EntryWheel extends StatefulWidget {
   final Future<void> Function(String) onSelected;
   final Future<void> Function() onAdd;
   final Future<void> Function() onAddQuietTime;
-  final Future<void> Function() onOpenScripture;
-  final bool christianMode;
+  final bool quietTimeLogging;
   final Future<void> Function() onFinish;
 
   @override
@@ -1019,31 +1019,22 @@ class _EntryWheelState extends State<_EntryWheel> {
                         ),
                       ),
                     ),
-                    _CompactAction(
+                    _NewEntryMenu(
                       key: const Key('new-entry'),
-                      tooltip: 'New entry',
-                      onPressed: widget.onAdd,
-                      icon: Icons.add_rounded,
+                      onAdd: widget.onAdd,
+                      onAddQuietTime: widget.quietTimeLogging
+                          ? widget.onAddQuietTime
+                          : null,
                     ),
-                    if (widget.christianMode)
-                      _CompactAction(
-                        key: const Key('new-quiet-time'),
-                        tooltip: 'New Quiet Time',
-                        onPressed: widget.onAddQuietTime,
-                        icon: Icons.church_outlined,
-                      ),
-                    if (widget.christianMode)
-                      _CompactAction(
-                        key: const Key('open-scripture'),
-                        tooltip: 'Open Scripture',
-                        onPressed: widget.onOpenScripture,
-                        icon: Icons.menu_book_outlined,
-                      ),
-                    _CompactAction(
+                    TextButton(
                       key: const Key('finish-journal'),
-                      tooltip: 'Done for now',
                       onPressed: widget.onFinish,
-                      icon: Icons.check_rounded,
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        minimumSize: const Size(48, 40),
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                      ),
+                      child: const Text('Done'),
                     ),
                   ],
                 ),
@@ -1239,25 +1230,42 @@ class _EntryWheelState extends State<_EntryWheel> {
   }
 }
 
-class _CompactAction extends StatelessWidget {
-  const _CompactAction({
-    required this.tooltip,
-    required this.onPressed,
-    required this.icon,
+class _NewEntryMenu extends StatelessWidget {
+  const _NewEntryMenu({
+    required this.onAdd,
+    required this.onAddQuietTime,
     super.key,
   });
 
-  final String tooltip;
-  final Future<void> Function() onPressed;
-  final IconData icon;
+  final Future<void> Function() onAdd;
+  final Future<void> Function()? onAddQuietTime;
 
   @override
-  Widget build(BuildContext context) => IconButton(
-    tooltip: tooltip,
-    visualDensity: VisualDensity.compact,
-    constraints: const BoxConstraints.tightFor(width: 40, height: 40),
-    onPressed: onPressed,
-    icon: Icon(icon, size: 19),
+  Widget build(BuildContext context) => MenuAnchor(
+    menuChildren: [
+      MenuItemButton(
+        key: const Key('new-journal-entry'),
+        onPressed: onAdd,
+        child: const Text('Journal entry'),
+      ),
+      if (onAddQuietTime != null)
+        MenuItemButton(
+          key: const Key('new-quiet-time'),
+          onPressed: onAddQuietTime,
+          child: const Text('Quiet Time'),
+        ),
+    ],
+    builder: (context, controller, child) => TextButton(
+      onPressed: onAddQuietTime == null
+          ? onAdd
+          : () => controller.isOpen ? controller.close() : controller.open(),
+      style: TextButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        minimumSize: const Size(44, 40),
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+      ),
+      child: const Text('New'),
+    ),
   );
 }
 

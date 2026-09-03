@@ -2,7 +2,7 @@
 
 Meno is a private, local-first journal for desktop and mobile. It combines a
 quiet full-page editor with a horizontal daily binder, optional on-device smart
-organization, and an opt-in Scripture workspace for Christian reflection.
+organization, and an optional Scripture workspace for Quiet Time journaling.
 
 Journal writing, gratitude, mood, tags, relationships, Scripture attachments,
 and preferences are stored on the device. The core journal does not require an
@@ -42,9 +42,9 @@ If the embedding model is absent or unavailable, tag extraction, full-text
 search, and shared-tag relationships continue to work. Generated tags never
 replace manual tags.
 
-## Christian Mode
+## Quiet Time logging
 
-Christian Mode is opt-in and hidden when disabled. It adds:
+Quiet Time logging is optional and hidden when disabled. It adds:
 
 - A focused choice of ESV, NIV, ERV, and NKJV through YouVersion.
 - A Scripture workspace shown beside the editor on desktop and as a full-height
@@ -133,7 +133,7 @@ Current verification status:
 
 - Journal data and analysis stay on-device.
 - Smart Organization only uses the network to download its optional model.
-- Christian Mode uses the network for explicitly selected YouVersion content.
+- Quiet Time logging uses the network for explicitly selected YouVersion content.
 - No API keys are stored in the repository.
 
 ## License
