@@ -200,7 +200,7 @@ class _BinderScreenState extends ConsumerState<BinderScreen>
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (context) => const SottoSettingsSheet(),
+      builder: (context) => const MenoSettingsSheet(),
     );
   }
 

@@ -8,8 +8,8 @@ import '../models/journal_entry.dart';
 import '../providers/journal_providers.dart';
 import '../services/embedding_service.dart';
 
-class SottoSettingsSheet extends ConsumerWidget {
-  const SottoSettingsSheet({super.key});
+class MenoSettingsSheet extends ConsumerWidget {
+  const MenoSettingsSheet({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -23,7 +23,7 @@ class SottoSettingsSheet extends ConsumerWidget {
           padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
           children: [
             const Text(
-              'Sotto settings',
+              'Meno settings',
               style: TextStyle(
                 fontFamily: 'Georgia',
                 fontSize: 28,

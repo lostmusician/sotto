@@ -3,7 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:sotto/services/embedding_service.dart';
+import 'package:meno/services/embedding_service.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -12,7 +12,7 @@ void main() {
     tester,
   ) async {
     final directory = await Directory.systemTemp.createTemp(
-      'sotto-embedding-smoke-',
+      'meno-embedding-smoke-',
     );
     final service = ArcticEmbeddingService(modelDirectory: directory);
     addTearDown(() async {

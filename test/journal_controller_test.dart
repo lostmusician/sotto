@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sotto/models/journal_entry.dart';
-import 'package:sotto/providers/journal_providers.dart';
+import 'package:meno/models/journal_entry.dart';
+import 'package:meno/providers/journal_providers.dart';
 
 import 'support/session_test_doubles.dart';
 

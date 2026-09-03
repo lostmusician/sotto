@@ -10,9 +10,13 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import '../models/journal_entry.dart';
 
 class DatabaseService {
-  DatabaseService({DatabaseFactory? factory, String? databasePath})
-    : _injectedFactory = factory,
-      _injectedPath = databasePath;
+  DatabaseService({
+    DatabaseFactory? factory,
+    String? databasePath,
+    Directory? supportDirectory,
+  }) : _injectedFactory = factory,
+       _injectedPath = databasePath,
+       _injectedSupportDirectory = supportDirectory;
 
   static const schemaVersion = 4;
   static const eveningSettingKey = 'evening_minutes';
@@ -22,6 +26,7 @@ class DatabaseService {
 
   final DatabaseFactory? _injectedFactory;
   final String? _injectedPath;
+  final Directory? _injectedSupportDirectory;
   Future<Database>? _databaseFuture;
 
   Future<Database> get database => _databaseFuture ??= _open();
@@ -369,9 +374,17 @@ class DatabaseService {
   }
 
   Future<String> _defaultPath() async {
-    final directory = await getApplicationSupportDirectory();
+    final directory =
+        _injectedSupportDirectory ?? await getApplicationSupportDirectory();
     await directory.create(recursive: true);
-    return p.join(directory.path, 'sotto.sqlite');
+    final path = p.join(directory.path, 'meno.sqlite');
+    final legacyPath = p.join(directory.path, 'sotto.sqlite');
+    final databaseFile = File(path);
+    if (!await databaseFile.exists() && await File(legacyPath).exists()) {
+      // Keep the legacy file as a recoverable backup during the product rename.
+      await File(legacyPath).copy(path);
+    }
+    return path;
   }
 
   Future<JournalDay> ensureDay(String dateKey, {DateTime? now}) async {

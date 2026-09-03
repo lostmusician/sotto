@@ -5,18 +5,18 @@ import 'ui/editor_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const ProviderScope(child: SottoApp()));
+  runApp(const ProviderScope(child: MenoApp()));
 }
 
-class SottoApp extends StatelessWidget {
-  const SottoApp({super.key});
+class MenoApp extends StatelessWidget {
+  const MenoApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     const ink = Color(0xFF262923);
     const paper = Color(0xFFF7F6F1);
     return MaterialApp(
-      title: 'Sotto',
+      title: 'Meno',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,

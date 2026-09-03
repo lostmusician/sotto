@@ -3,9 +3,9 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sotto/models/journal_entry.dart';
-import 'package:sotto/providers/journal_providers.dart';
-import 'package:sotto/ui/editor_screen.dart';
+import 'package:meno/models/journal_entry.dart';
+import 'package:meno/providers/journal_providers.dart';
+import 'package:meno/ui/editor_screen.dart';
 
 import 'support/session_test_doubles.dart';
 

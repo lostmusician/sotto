@@ -1,8 +1,8 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sotto/models/journal_entry.dart';
-import 'package:sotto/services/database_service.dart';
+import 'package:meno/models/journal_entry.dart';
+import 'package:meno/services/database_service.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
@@ -131,10 +131,38 @@ void main() {
     expect(page.single.checkIn, isNotNull);
   });
 
+  test('copies the legacy Sotto database into Meno on first launch', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'meno-database-rename-',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final legacy = DatabaseService(
+      factory: databaseFactoryFfi,
+      databasePath: '${directory.path}/sotto.sqlite',
+    );
+    await legacy.saveDay(
+      JournalDay.empty('2026-09-02').copyWith(gratitude: 'A preserved entry.'),
+    );
+    await legacy.close();
+
+    final renamed = DatabaseService(
+      factory: databaseFactoryFfi,
+      supportDirectory: directory,
+    );
+    addTearDown(renamed.close);
+
+    expect(
+      (await renamed.journalDay('2026-09-02'))?.gratitude,
+      'A preserved entry.',
+    );
+    expect(await File('${directory.path}/sotto.sqlite').exists(), isTrue);
+    expect(await File('${directory.path}/meno.sqlite').exists(), isTrue);
+  });
+
   test(
     'migrates v2 entries into separate day entries and preserves legacy rows',
     () async {
-      final directory = await Directory.systemTemp.createTemp('sotto-v3-');
+      final directory = await Directory.systemTemp.createTemp('meno-v3-');
       addTearDown(() => directory.delete(recursive: true));
       final path = '${directory.path}/legacy.sqlite';
       final legacy = await databaseFactoryFfi.openDatabase(

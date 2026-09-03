@@ -1,6 +1,6 @@
-# Sotto
+# Meno
 
-Sotto is a private, local-first journal for desktop and mobile. It combines a
+Meno is a private, local-first journal for desktop and mobile. It combines a
 quiet full-page editor with a horizontal daily binder, optional on-device smart
 organization, and an opt-in Scripture workspace for Christian reflection.
 
@@ -14,7 +14,7 @@ account, network connection, or AI model.
 - Any number of separate **Additional Entries** in the same day.
 - A shared daily mood check-in represented as reflective tone and intensity,
   not a diagnosis.
-- Time-aware routing: before the configured evening time Sotto opens an
+- Time-aware routing: before the configured evening time Meno opens an
   unfinished Daily Journal; in the evening it asks for a missing mood first.
 - A fast horizontal binder for browsing recorded days, weeks, and months.
 - A compact, always-visible entry wheel for moving between a day's entries.
@@ -138,7 +138,7 @@ Current verification status:
 
 ## License
 
-Sotto is available under the [MIT License](LICENSE). Models, packages, and
+Meno is available under the [MIT License](LICENSE). Models, packages, and
 remote Bible translations retain their respective licenses and attribution
 requirements. Arctic Embed XS is Apache-2.0 licensed; YouVersion content is
 governed by the terms and translation licenses granted to the registered app.

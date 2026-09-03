@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sotto/models/journal_entry.dart';
-import 'package:sotto/providers/journal_providers.dart';
-import 'package:sotto/services/bible_service.dart';
-import 'package:sotto/services/database_service.dart';
-import 'package:sotto/ui/editor_screen.dart';
-import 'package:sotto/ui/scripture_screen.dart';
+import 'package:meno/models/journal_entry.dart';
+import 'package:meno/providers/journal_providers.dart';
+import 'package:meno/services/bible_service.dart';
+import 'package:meno/services/database_service.dart';
+import 'package:meno/ui/editor_screen.dart';
+import 'package:meno/ui/scripture_screen.dart';
 
 import 'support/session_test_doubles.dart';
 
@@ -120,7 +120,7 @@ void main() {
     await tester.tap(find.byKey(const Key('binder-settings')));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
-    Navigator.of(tester.element(find.text('Sotto settings'))).pop();
+    Navigator.of(tester.element(find.text('Meno settings'))).pop();
     await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const Key('edit-journal')));

@@ -1,4 +1,4 @@
-package com.ivanchiew.sotto
+package com.ivanchiew.meno
 
 import io.flutter.embedding.android.FlutterActivity
 

@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sotto/models/journal_entry.dart';
-import 'package:sotto/providers/journal_providers.dart';
-import 'package:sotto/ui/editor_screen.dart';
+import 'package:meno/models/journal_entry.dart';
+import 'package:meno/providers/journal_providers.dart';
+import 'package:meno/ui/editor_screen.dart';
 
 import 'support/session_test_doubles.dart';
 
@@ -45,16 +45,18 @@ void main() {
     final controller = harness.container.read(
       journalControllerProvider.notifier,
     );
-    await controller.addEntry();
+    await controller.addEntry(now: DateTime(2026, 9, 1, 12, 30));
     controller.updateEntry(
       title: 'A thought at lunch',
       content: 'The slower route made room for a better conversation.',
+      now: DateTime(2026, 9, 1, 12, 30),
     );
     await controller.saveCurrentEntry();
-    await controller.addEntry();
+    await controller.addEntry(now: DateTime(2026, 9, 1, 16, 45));
     controller.updateEntry(
       title: 'Late afternoon',
       content: 'A quiet idea worth returning to tomorrow.',
+      now: DateTime(2026, 9, 1, 16, 45),
     );
     await tester.pumpAndSettle();
     await expectLater(

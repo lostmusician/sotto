@@ -3,8 +3,8 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:sotto/models/journal_entry.dart';
-import 'package:sotto/services/bible_service.dart';
+import 'package:meno/models/journal_entry.dart';
+import 'package:meno/services/bible_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
